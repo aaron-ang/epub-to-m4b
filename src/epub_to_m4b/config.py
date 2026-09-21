@@ -6,26 +6,29 @@ Resolution order for *which* file to read (first match wins):
 2. the ``E2M_CONFIG`` environment variable
 3. ``~/.config/epub-to-m4b/config.toml`` (fine if it doesn't exist)
 
-Only ``[engine.<name>]`` tables are understood so far - just enough to
-select and configure ``--engine breeze``. Each engine keeps its own frozen
-config dataclass (``BreezeConfig`` today; ``OpenAIConfig``/``ElevenLabsConfig``/
-``DeepgramConfig`` land the same way in a later milestone, one new
-``_build_<name>_config`` + ``AppConfig`` field each - nothing generic beyond
-that is needed yet). This module's job is only to read the matching TOML
-table and merge it onto the dataclass, raising ``ConfigError`` with a clear
-message when required keys are missing rather than letting a bare
-TypeError/KeyError reach the user as a stack trace.
+Only ``[engine.<name>]`` tables are understood. Each engine keeps its own
+frozen config dataclass (``BreezeConfig``, ``OpenAIConfig``,
+``ElevenLabsConfig``, ``DeepgramConfig``) and ``AppConfig`` carries one
+optional field per engine. ``_build_engine_config`` merges a TOML table onto
+any of those dataclasses, driven by its declared fields: unknown keys and
+missing required keys raise ``ConfigError`` with the section named, rather
+than letting a bare TypeError/KeyError reach the user as a stack trace.
+Per-engine quirks (breeze's path/command coercion and injected cache_dir)
+are passed in as arguments, not special-cased inside the builder.
 """
 
 from __future__ import annotations
 
 import os
 import tomllib
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from epub_to_m4b.tts.breeze import BreezeConfig
+from epub_to_m4b.tts.deepgram import DeepgramConfig
+from epub_to_m4b.tts.elevenlabs import ElevenLabsConfig
+from epub_to_m4b.tts.openai_compat import OpenAIConfig
 
 _CONFIG_ENV_VAR = "E2M_CONFIG"
 _CACHE_DIR_ENV_VAR = "E2M_CACHE_DIR"
@@ -37,10 +40,9 @@ DEFAULT_CONFIG_PATH = Path("~/.config/epub-to-m4b/config.toml").expanduser()
 # here (cache_dir / "breeze").
 DEFAULT_CACHE_DIR = Path("~/.cache/epub-to-m4b").expanduser()
 
-# Keys copied onto BreezeConfig verbatim (after light type coercion below).
-# cache_dir is deliberately excluded - see DEFAULT_CACHE_DIR above.
-_BREEZE_KEYS = ("weights_dir", "command", "port", "instruction", "cfg_scale", "seed", "batch_size")
 _BREEZE_REQUIRED = ("weights_dir", "command")
+_OPENAI_REQUIRED = ("base_url", "model", "voice")
+_ELEVENLABS_REQUIRED = ("voice_id",)
 
 
 class ConfigError(Exception):
@@ -52,12 +54,16 @@ class AppConfig:
     """Resolved config for one run. One optional field per pluggable engine.
 
     ``None`` means "no ``[engine.<name>]`` table was configured" - engines
-    with no required fields (silence/tone) don't need one; engines that do
-    (breeze) raise ``ConfigError`` from their registry factory instead of a
-    confusing attribute/type error deeper in the engine.
+    with no required fields (silence/tone/deepgram) don't need one; engines
+    that do (breeze/openai/elevenlabs) raise ``ConfigError`` from their
+    registry factory instead of a confusing attribute/type error deeper in
+    the engine.
     """
 
     breeze: BreezeConfig | None = None
+    openai: OpenAIConfig | None = None
+    elevenlabs: ElevenLabsConfig | None = None
+    deepgram: DeepgramConfig | None = None
 
 
 def resolve_config_path(cli_path: Path | None) -> Path:
@@ -106,40 +112,105 @@ def _sub_table(data: Mapping[str, object], *keys: str) -> Mapping[str, object] |
     return node if isinstance(node, Mapping) else None
 
 
-def _build_breeze_config(table: Mapping[str, object], *, cache_dir: Path) -> BreezeConfig:
-    unknown = sorted(set(table) - set(_BREEZE_KEYS))
+def _coerce_weights_dir(raw_value: object) -> Path:
+    return Path(str(raw_value)).expanduser()
+
+
+def _coerce_command(raw_value: object) -> list[str]:
+    if not isinstance(raw_value, list) or not raw_value:
+        raise ConfigError("[engine.breeze].command must be a non-empty array of strings")
+    return [str(part) for part in raw_value]
+
+
+def _build_engine_config[C](
+    table: Mapping[str, object],
+    config_cls: type[C],
+    *,
+    section: str,
+    required: tuple[str, ...],
+    coerce: Mapping[str, Callable[[object], object]] = {},
+    extra: Mapping[str, object] = {},
+    missing_hint: str = "",
+) -> C:
+    """Merge one ``[engine.<section>]`` table onto ``config_cls``.
+
+    The dataclass's own fields define the accepted keys, minus anything
+    supplied through ``extra`` (values the tool injects itself rather than
+    reads from TOML). ``coerce`` maps a key to a function applied to its raw
+    TOML value before construction.
+    """
+    accepted = {f.name for f in fields(config_cls)} - set(extra)  # type: ignore[arg-type]
+    unknown = sorted(set(table) - accepted)
     if unknown:
-        raise ConfigError(f"[engine.breeze]: unknown key(s): {', '.join(unknown)}")
-    missing = [key for key in _BREEZE_REQUIRED if key not in table]
+        raise ConfigError(f"[engine.{section}]: unknown key(s): {', '.join(unknown)}")
+    missing = [key for key in required if key not in table]
     if missing:
         raise ConfigError(
-            f"[engine.breeze] is missing required key(s): {', '.join(missing)} - "
-            "breeze ships no default command, so it must be fully configured before "
-            "it can be selected with --engine breeze"
+            f"[engine.{section}] is missing required key(s): {', '.join(missing)}{missing_hint}"
         )
-    kwargs: dict[str, object] = {"cache_dir": cache_dir}
+    kwargs: dict[str, object] = dict(extra)
     for key, raw_value in table.items():
-        coerced: object = raw_value
-        if key == "weights_dir":
-            coerced = Path(str(raw_value)).expanduser()
-        elif key == "command":
-            if not isinstance(raw_value, list) or not raw_value:
-                raise ConfigError("[engine.breeze].command must be a non-empty array of strings")
-            coerced = [str(part) for part in raw_value]
-        kwargs[key] = coerced
-    return BreezeConfig(**kwargs)  # type: ignore[arg-type]
+        kwargs[key] = coerce[key](raw_value) if key in coerce else raw_value
+    return config_cls(**kwargs)
+
+
+def _build_breeze_config(table: Mapping[str, object], *, cache_dir: Path) -> BreezeConfig:
+    return _build_engine_config(
+        table,
+        BreezeConfig,
+        section="breeze",
+        required=_BREEZE_REQUIRED,
+        coerce={"weights_dir": _coerce_weights_dir, "command": _coerce_command},
+        extra={"cache_dir": cache_dir},
+        missing_hint=(
+            " - breeze ships no default command, so it must be fully configured before "
+            "it can be selected with --engine breeze"
+        ),
+    )
 
 
 def load_config(cli_path: Path | None, *, cache_dir: Path = DEFAULT_CACHE_DIR) -> AppConfig:
     """Read the resolved config file (if any) and build per-engine configs.
 
-    A missing env/default-resolved path just means "no config" (breeze stays
-    ``None`` - fine, silence/tone don't need one). An explicit ``--config``
-    path (or ``E2M_CONFIG``) that doesn't exist, malformed TOML, or a
-    ``[engine.breeze]`` table missing required keys are all ``ConfigError``.
+    A missing env/default-resolved path just means "no config" (every engine
+    field stays ``None`` - fine, silence/tone don't need one). An explicit
+    ``--config`` path (or ``E2M_CONFIG``) that doesn't exist, malformed TOML,
+    or an engine table with unknown or missing required keys are all
+    ``ConfigError``. A present-but-empty table still yields that engine's
+    all-defaults config.
     """
     path = resolve_config_path(cli_path)
     data = _load_toml(path, explicit=_is_explicit(cli_path))
     breeze_table = _sub_table(data, "engine", "breeze")
-    breeze = _build_breeze_config(breeze_table, cache_dir=cache_dir) if breeze_table else None
-    return AppConfig(breeze=breeze)
+    openai_table = _sub_table(data, "engine", "openai")
+    elevenlabs_table = _sub_table(data, "engine", "elevenlabs")
+    deepgram_table = _sub_table(data, "engine", "deepgram")
+    return AppConfig(
+        breeze=(
+            _build_breeze_config(breeze_table, cache_dir=cache_dir)
+            if breeze_table is not None
+            else None
+        ),
+        openai=(
+            _build_engine_config(
+                openai_table, OpenAIConfig, section="openai", required=_OPENAI_REQUIRED
+            )
+            if openai_table is not None
+            else None
+        ),
+        elevenlabs=(
+            _build_engine_config(
+                elevenlabs_table,
+                ElevenLabsConfig,
+                section="elevenlabs",
+                required=_ELEVENLABS_REQUIRED,
+            )
+            if elevenlabs_table is not None
+            else None
+        ),
+        deepgram=(
+            _build_engine_config(deepgram_table, DeepgramConfig, section="deepgram", required=())
+            if deepgram_table is not None
+            else None
+        ),
+    )

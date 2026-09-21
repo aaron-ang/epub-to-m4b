@@ -11,6 +11,9 @@ from epub_to_m4b.config import (
     load_config,
     resolve_config_path,
 )
+from epub_to_m4b.tts.deepgram import DeepgramConfig
+from epub_to_m4b.tts.elevenlabs import ElevenLabsConfig
+from epub_to_m4b.tts.openai_compat import OpenAIConfig
 
 
 def _write(path: Path, text: str) -> Path:
@@ -119,3 +122,70 @@ def test_resolve_config_path_cli_beats_env_beats_default(
     assert resolve_config_path(None) == env_path
 
     assert resolve_config_path(cli_path) == cli_path
+
+
+def test_load_config_parses_openai_table(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "config.toml",
+        """
+        [engine.openai]
+        base_url = "http://localhost:8880"
+        model = "kokoro"
+        voice = "af_heart"
+        speed = 1.1
+        api_key_env = "KOKORO_KEY"
+        """,
+    )
+    assert load_config(path).openai == OpenAIConfig(
+        base_url="http://localhost:8880",
+        model="kokoro",
+        voice="af_heart",
+        speed=1.1,
+        api_key_env="KOKORO_KEY",
+    )
+
+
+def test_load_config_parses_elevenlabs_table_with_defaults(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", '[engine.elevenlabs]\nvoice_id = "abc"\n')
+    assert load_config(path).elevenlabs == ElevenLabsConfig(voice_id="abc")
+
+
+def test_load_config_parses_deepgram_table(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", '[engine.deepgram]\nmodel = "aura-2-orion-en"\n')
+    assert load_config(path).deepgram == DeepgramConfig(model="aura-2-orion-en")
+
+
+def test_load_config_empty_deepgram_table_still_yields_a_config(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", "[engine.deepgram]\n")
+    assert load_config(path).deepgram == DeepgramConfig()
+
+
+def test_load_config_no_api_tables_yields_none_for_each(tmp_path: Path) -> None:
+    config = load_config(_write(tmp_path / "config.toml", ""))
+    assert (config.openai, config.elevenlabs, config.deepgram) == (None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("section", "body"),
+    [
+        ("openai", 'base_url = "x"\nmodel = "m"\nvoice = "v"\nbogus = 1'),
+        ("elevenlabs", 'voice_id = "v"\nbogus = 1'),
+        ("deepgram", "bogus = 1"),
+    ],
+)
+def test_load_config_unknown_key_names_the_section(tmp_path: Path, section: str, body: str) -> None:
+    path = _write(tmp_path / "config.toml", f"[engine.{section}]\n{body}\n")
+    with pytest.raises(ConfigError, match=rf"\[engine\.{section}\]: unknown key\(s\): bogus"):
+        load_config(path)
+
+
+def test_load_config_openai_missing_required_keys_lists_them(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", '[engine.openai]\nmodel = "m"\n')
+    with pytest.raises(ConfigError, match=r"\[engine\.openai\].*base_url, voice"):
+        load_config(path)
+
+
+def test_load_config_elevenlabs_missing_voice_id_raises(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", "[engine.elevenlabs]\n")
+    with pytest.raises(ConfigError, match=r"\[engine\.elevenlabs\].*voice_id"):
+        load_config(path)

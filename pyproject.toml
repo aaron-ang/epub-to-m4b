@@ -1,0 +1,73 @@
+[project]
+name = "epub-to-m4b"
+version = "0.1.0"
+description = "Turn an EPUB into an M4B audiobook with a WebVTT transcript, using pluggable TTS engines."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "ebooklib>=0.19",
+    "beautifulsoup4>=4.13",
+    "lxml>=5",
+    "num2words>=0.5.14",
+    "numpy>=2",
+    "soundfile>=0.13",
+    "httpx>=0.28",
+    "mutagen>=1.47",
+]
+
+[project.scripts]
+epub-to-m4b = "epub_to_m4b.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=6",
+    "ruff>=0.12",
+    "mypy>=1.14",
+    "types-beautifulsoup4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/epub_to_m4b"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N", "RUF", "PL"]
+ignore = ["PLR0913", "PLR2004"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+packages = ["epub_to_m4b"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["ebooklib.*", "soundfile", "mutagen.*", "num2words"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: needs a running Breeze sidecar and CUDA",
+    "network: hits a paid API",
+]
+addopts = "-m 'not gpu and not network'"

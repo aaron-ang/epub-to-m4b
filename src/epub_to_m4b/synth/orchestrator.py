@@ -18,6 +18,7 @@ cache by then) are loaded from disk just before that chapter is assembled.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -205,6 +206,13 @@ def _resolve_pending(
     return pending
 
 
+def _synthesize_batch(engine: TTSEngine, batch: Sequence[PendingClip]) -> list[AudioClip]:
+    clips = engine.synthesize([item.text for item in batch])
+    if len(clips) != len(batch):
+        raise ValueError(f"engine returned {len(clips)} clips for {len(batch)} texts")
+    return clips
+
+
 def _synthesize_pending(
     pending: Sequence[PendingClip],
     engine: TTSEngine,
@@ -216,17 +224,39 @@ def _synthesize_pending(
     """Run every pending sentence through the engine, length-sorted and
     capped at ``engine.max_batch`` per call, storing each result to the
     clip cache the moment it comes back - so a crash partway through only
-    ever costs the in-flight batch's work."""
+    ever costs the in-flight batches' work.
+
+    Engines that allow it (``max_concurrency`` above one - the hosted APIs)
+    get their batches fanned out over a thread pool; results are stored as
+    each finishes, in whatever order that is, since every clip travels with
+    its own ``PendingClip`` key. Everything else stays a plain sequential
+    loop with no threads involved.
+    """
     batches = make_batches(pending, engine.max_batch)
     done = 0
-    for n, batch in enumerate(batches, start=1):
-        clips = engine.synthesize([item.text for item in batch])
-        if len(clips) != len(batch):
-            raise ValueError(f"engine returned {len(clips)} clips for {len(batch)} texts")
+
+    def store(n: int, batch: Sequence[PendingClip], clips: Sequence[AudioClip]) -> None:
+        nonlocal done
         for item, clip in zip(batch, clips, strict=True):
             cache.store_clip(cache_dir, engine_fingerprint, item.key, clip)
         done += len(batch)
         log(f"batch {n}/{len(batches)}, {done}/{len(pending)} clips")
+
+    if engine.max_concurrency <= 1:
+        for n, batch in enumerate(batches, start=1):
+            store(n, batch, _synthesize_batch(engine, batch))
+        return
+
+    with ThreadPoolExecutor(max_workers=engine.max_concurrency) as executor:
+        futures = {executor.submit(_synthesize_batch, engine, batch): batch for batch in batches}
+        try:
+            for n, future in enumerate(as_completed(futures), start=1):
+                store(n, futures[future], future.result())
+        except BaseException:
+            # Drop the batches still queued so the failure surfaces now
+            # rather than after the whole pool drains.
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
 
 
 def _cues(

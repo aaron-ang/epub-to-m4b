@@ -28,6 +28,7 @@ from pathlib import Path
 from epub_to_m4b.tts.breeze import BreezeConfig
 
 _CONFIG_ENV_VAR = "E2M_CONFIG"
+_CACHE_DIR_ENV_VAR = "E2M_CACHE_DIR"
 DEFAULT_CONFIG_PATH = Path("~/.config/epub-to-m4b/config.toml").expanduser()
 # Not read from TOML (it's not a per-engine tuning knob, it's where *this*
 # tool keeps its own state) - matches the resume cache layout documented in
@@ -67,6 +68,17 @@ def resolve_config_path(cli_path: Path | None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
     return DEFAULT_CONFIG_PATH
+
+
+def resolve_cache_dir() -> Path:
+    """``E2M_CACHE_DIR`` env var override of ``DEFAULT_CACHE_DIR`` - lets the
+    resume clip cache live somewhere other than ``~/.cache/epub-to-m4b``
+    without a config file, same override precedent as ``E2M_CONFIG``. Handy
+    for tests that must not touch a real user cache, and for anyone who
+    wants the cache on a different disk.
+    """
+    value = os.environ.get(_CACHE_DIR_ENV_VAR)
+    return Path(value).expanduser() if value else DEFAULT_CACHE_DIR
 
 
 def _is_explicit(cli_path: Path | None) -> bool:

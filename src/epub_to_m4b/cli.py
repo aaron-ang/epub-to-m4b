@@ -10,7 +10,6 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from epub_to_m4b import __version__
-from epub_to_m4b.audio.assemble import assemble_chapter
 from epub_to_m4b.audio.ffmpeg import (
     concat_command,
     concat_list,
@@ -21,9 +20,9 @@ from epub_to_m4b.audio.ffmpeg import (
 from epub_to_m4b.audio.metadata import build_ffmetadata, embed_cover
 from epub_to_m4b.audio.vtt import write_vtt
 from epub_to_m4b.book import Book, Paragraph, ParagraphKind
-from epub_to_m4b.config import ConfigError, load_config
+from epub_to_m4b.config import ConfigError, load_config, resolve_cache_dir
 from epub_to_m4b.epub.reader import read_book
-from epub_to_m4b.synth.orchestrator import GapPolicy, chapter_to_sentences, synthesize_chapter
+from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
 from epub_to_m4b.text.normalize import normalize
 from epub_to_m4b.text.split import split_paragraph
 from epub_to_m4b.tts.registry import available_engines, create_engine
@@ -141,41 +140,50 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
         return 1
 
     policy = GapPolicy()
+
+    def _log_chapter(idx: int, total: int, title: str, n_sentences: int) -> None:
+        print(f"[{idx + 1}/{total}] {title} — {n_sentences} sentences")
+
+    with engine:
+        results = synthesize_book(
+            book,
+            engine,
+            cache_dir=resolve_cache_dir(),
+            out_dir=out_dir,
+            policy=policy,
+            on_chapter_start=_log_chapter,
+        )
+
     cues: list[tuple[str, float, float]] = []
     durations: list[float] = []
+    chapter_files: list[Path] = []
     book_cursor = 0.0
+    for result in results:
+        for text, start, end in result.cues:
+            cues.append((text, book_cursor + start, book_cursor + end))
+        durations.append(result.duration)
+        chapter_files.append(result.flac_path)
+        book_cursor += result.duration
 
-    with (
-        engine,
-        tempfile.TemporaryDirectory(prefix="epub-to-m4b-") as tmp_name,
-    ):
-        tmp_dir = Path(tmp_name)
-        chapter_files: list[Path] = []
-        for idx, chapter in enumerate(book.chapters):
-            sentences = chapter_to_sentences(chapter, idx, policy=policy)
-            print(f"[{idx + 1}/{len(book.chapters)}] {chapter.title} — {len(sentences)} sentences")
-            pairs = synthesize_chapter(sentences, engine)
-            chapter_path = tmp_dir / f"{idx:04d}.flac"
-            offsets, duration = assemble_chapter(
-                pairs, chapter_path, sample_rate=engine.sample_rate
-            )
-            for (sentence, _clip), (start, end) in zip(pairs, offsets, strict=True):
-                cues.append((sentence.text, book_cursor + start, book_cursor + end))
-            durations.append(duration)
-            chapter_files.append(chapter_path)
-            book_cursor += duration
+    m4b_is_stale = not m4b_path.is_file() or any(
+        f.stat().st_mtime > m4b_path.stat().st_mtime for f in chapter_files
+    )
+    if m4b_is_stale:
+        with tempfile.TemporaryDirectory(prefix="epub-to-m4b-") as tmp_name:
+            tmp_dir = Path(tmp_name)
+            list_path = tmp_dir / "concat.txt"
+            list_path.write_text(concat_list(chapter_files), encoding="utf-8")
+            combined_path = tmp_dir / "combined.flac"
+            run_command(concat_command(list_path, combined_path))
 
-        list_path = tmp_dir / "concat.txt"
-        list_path.write_text(concat_list(chapter_files), encoding="utf-8")
-        combined_path = tmp_dir / "combined.flac"
-        run_command(concat_command(list_path, combined_path))
+            metadata_path = tmp_dir / "ffmetadata.txt"
+            metadata_path.write_text(build_ffmetadata(book, durations), encoding="utf-8")
+            run_command(encode_m4b_command(combined_path, metadata_path, m4b_path))
 
-        metadata_path = tmp_dir / "ffmetadata.txt"
-        metadata_path.write_text(build_ffmetadata(book, durations), encoding="utf-8")
-        run_command(encode_m4b_command(combined_path, metadata_path, m4b_path))
-
-    if book.cover and book.cover_mime:
-        embed_cover(m4b_path, book.cover, book.cover_mime)
+        if book.cover and book.cover_mime:
+            embed_cover(m4b_path, book.cover, book.cover_mime)
+    else:
+        print(f"{m4b_path} already up to date, skipping re-encode")
 
     write_vtt(cues, vtt_path)
     print(f"wrote {m4b_path}")

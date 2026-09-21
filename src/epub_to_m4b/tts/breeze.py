@@ -1,0 +1,219 @@
+"""BreezeEngine: self-hosted Breeze-TTS sidecar, batched over its HTTP API.
+
+Contract of the sidecar (see ``breeze_infer/api.py`` in the ``breeze-tts``
+project): ``GET /health`` for readiness/sample rate, ``POST
+/v1/audio/speech`` for a single non-batched clip (used here only to
+bootstrap the one-time reference voice), and ``POST /v1/audio/speech/batch``
+for everything else - texts as a JSON-encoded array, response body the
+concatenation of every segment's s16le PCM with ``X-Segment-Bytes`` giving
+each segment's length. The server serves one inference at a time and
+answers 409 while busy.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import time
+import wave
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import ClassVar
+
+import httpx
+import numpy as np
+
+from epub_to_m4b.book import AudioClip
+from epub_to_m4b.tts import guard
+from epub_to_m4b.tts.base import TTSEngine, pcm16_to_float32
+from epub_to_m4b.tts.sidecar import SidecarHandle, start_or_adopt
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_INSTRUCTION = "A clear, neutral adult narrator voice with a calm, steady reading pace."
+# Fixed reference text read once to bootstrap a consistent narrator voice;
+# without a reference, Breeze samples a new voice per call.
+_REFERENCE_TEXT = "This is a clear, steady voice reading aloud for narration."
+_REFERENCE_TIMEOUT_SECONDS = 300.0
+# A full batch decodes for minutes, not seconds.
+_BATCH_TIMEOUT_SECONDS = 1800.0
+_BUSY_STATUS = 409
+_BUSY_RETRIES = 60
+_BUSY_WAIT_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class BreezeConfig:
+    weights_dir: Path
+    command: Sequence[str]
+    cache_dir: Path
+    port: int = 7861
+    instruction: str = _DEFAULT_INSTRUCTION
+    cfg_scale: float = 4.0
+    seed: int = 42
+    batch_size: int = 64
+
+
+def _write_wav(path: Path, pcm_bytes: bytes, sample_rate: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm_bytes)
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@dataclass
+class BreezeEngine(TTSEngine):
+    """Batches sentences to a local Breeze-TTS sidecar over HTTP.
+
+    Bootstraps the sidecar (adopt/spawn, see ``tts/sidecar.py``) and the
+    reference voice eagerly on construction, so a fully-built engine is
+    always immediately ready to synthesize.
+    """
+
+    name: ClassVar[str] = "breeze"
+
+    config: BreezeConfig
+    transport: httpx.BaseTransport | None = None
+    busy_retries: int = _BUSY_RETRIES
+    busy_wait_seconds: float = _BUSY_WAIT_SECONDS
+
+    sample_rate: int = field(init=False)
+    _sidecar: SidecarHandle = field(init=False, repr=False)
+    _client: httpx.Client = field(init=False, repr=False)
+    _reference_wav: Path = field(init=False, repr=False)
+    _reference_text: str = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        client_kwargs: dict[str, httpx.BaseTransport] = {}
+        if self.transport is not None:
+            client_kwargs["transport"] = self.transport
+        self._client = httpx.Client(**client_kwargs)  # type: ignore[arg-type]
+
+        log_path = self.config.cache_dir / f"breeze-server-{self.config.port}.log"
+        self._sidecar = start_or_adopt(
+            self.config.command,
+            self.config.port,
+            log_path=log_path,
+            transport=self.transport,
+        )
+        self.sample_rate = self._sidecar.sample_rate
+        self._reference_wav, self._reference_text = self._load_or_create_reference_voice()
+
+    def _load_or_create_reference_voice(self) -> tuple[Path, str]:
+        ref_dir = self.config.cache_dir / "breeze"
+        ref_wav = ref_dir / "reference_voice.wav"
+        ref_txt = ref_dir / "reference_voice.txt"
+        if ref_wav.exists() and ref_txt.exists():
+            return ref_wav, ref_txt.read_text(encoding="utf-8")
+
+        response = self._client.post(
+            f"{self._sidecar.base_url}/v1/audio/speech",
+            data={
+                "text": _REFERENCE_TEXT,
+                "instruction": self.config.instruction,
+                "cfg_scale": self.config.cfg_scale,
+                "seed": self.config.seed,
+            },
+            timeout=_REFERENCE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        _write_wav(ref_wav, response.content, self.sample_rate)
+        ref_txt.write_text(_REFERENCE_TEXT, encoding="utf-8")
+        return ref_wav, _REFERENCE_TEXT
+
+    def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
+        all_texts = list(texts)
+        clips: list[AudioClip] = []
+        for start in range(0, len(all_texts), self.config.batch_size):
+            chunk = all_texts[start : start + self.config.batch_size]
+            clips.extend(self._synthesize_chunk(chunk, seed=self.config.seed))
+
+        def reseed(text: str, attempt: int) -> AudioClip:
+            (clip,) = self._synthesize_chunk([text], seed=self.config.seed + attempt)
+            return clip
+
+        guarded, notes = guard.apply_guard(clips, all_texts, reseed)
+        for note in notes:
+            logger.info("Breeze %s", note)
+        return guarded
+
+    def _synthesize_chunk(self, chunk: Sequence[str], *, seed: int) -> list[AudioClip]:
+        data = {
+            "texts": json.dumps(list(chunk)),
+            "instruction": self.config.instruction,
+            "cfg_scale": self.config.cfg_scale,
+            "ref_text": self._reference_text,
+            "seed": seed,
+            "max_new_tokens": guard.max_new_tokens(chunk),
+        }
+        response = self._post_batch_with_retry(data)
+        return self._split_segments(response)
+
+    def _post_batch_with_retry(self, data: dict[str, object]) -> httpx.Response:
+        warned = False
+        response: httpx.Response | None = None
+        for attempt in range(self.busy_retries + 1):
+            with self._reference_wav.open("rb") as ref_audio_file:
+                response = self._client.post(
+                    f"{self._sidecar.base_url}/v1/audio/speech/batch",
+                    data=data,
+                    files={"ref_audio": ("reference_voice.wav", ref_audio_file, "audio/wav")},
+                    timeout=_BATCH_TIMEOUT_SECONDS,
+                )
+            if response.status_code != _BUSY_STATUS or attempt == self.busy_retries:
+                break
+            if not warned:
+                logger.info("Breeze server busy, waiting for the running inference to finish")
+                warned = True
+            time.sleep(self.busy_wait_seconds)
+        assert response is not None  # loop always runs at least once
+        response.raise_for_status()
+        return response
+
+    def _split_segments(self, response: httpx.Response) -> list[AudioClip]:
+        header = response.headers.get("X-Segment-Bytes", "")
+        if not header:
+            raise RuntimeError("Breeze batch response is missing the X-Segment-Bytes header")
+        sizes = [int(value) for value in header.split(",")]
+        sample_rate = int(response.headers.get("X-Sample-Rate", self.sample_rate))
+        body = response.content
+        if sum(sizes) != len(body):
+            raise RuntimeError(
+                f"Breeze batch response segment sizes sum to {sum(sizes)} "
+                f"but body is {len(body)} bytes"
+            )
+        clips = []
+        offset = 0
+        for size in sizes:
+            raw = body[offset : offset + size]
+            offset += size
+            pcm = np.frombuffer(raw, dtype="<i2")
+            clips.append(AudioClip(samples=pcm16_to_float32(pcm), sample_rate=sample_rate))
+        return clips
+
+    def fingerprint(self) -> str:
+        digest = hashlib.sha256()
+        parts = (
+            self.name,
+            str(self.config.weights_dir),
+            self.config.instruction,
+            repr(self.config.cfg_scale),
+            repr(self.config.seed),
+            _sha256_file(self._reference_wav),
+        )
+        for part in parts:
+            digest.update(part.encode("utf-8"))
+            digest.update(b"\0")
+        return digest.hexdigest()
+
+    def close(self) -> None:
+        self._sidecar.close()
+        self._client.close()

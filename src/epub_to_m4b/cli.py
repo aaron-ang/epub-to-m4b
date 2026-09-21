@@ -142,9 +142,14 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    def log(message: str) -> None:
+        # Renders run for hours under nohup/redirect; block-buffered stdout
+        # would show nothing until exit.
+        print(message, flush=True)
+
     with engine:
         results = synthesize_book(
-            book, engine, cache_dir=cache_dir, out_dir=out_dir, policy=GapPolicy(), log=print
+            book, engine, cache_dir=cache_dir, out_dir=out_dir, policy=GapPolicy(), log=log
         )
 
     cues: list[tuple[str, float, float]] = []

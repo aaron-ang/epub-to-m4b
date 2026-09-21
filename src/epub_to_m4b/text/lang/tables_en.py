@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 # Abbreviation -> full expansion. Keys keep their trailing period so the
 # lookup in english.py can match "Mr." as one token instead of "Mr" + ".".
 ABBREVIATIONS: dict[str, str] = {
@@ -18,6 +20,13 @@ ABBREVIATIONS: dict[str, str] = {
     "Sr.": "Senior",
     "No.": "Number",
 }
+
+# Longest-first alternation of known abbreviations, e.g. "Mr." / "e.g." -
+# matched as whole tokens so their periods never look like a sentence end.
+ABBREV_TOKENS: tuple[str, ...] = tuple(sorted(ABBREVIATIONS, key=len, reverse=True))
+ABBREV_RE: re.Pattern[str] = re.compile(
+    r"(?<!\w)(" + "|".join(re.escape(tok) for tok in ABBREV_TOKENS) + r")"
+)
 
 # Last digit of a number -> its ordinal suffix, for validating "21st" /
 # rejecting a mismatched "21th". Anything not in this map (0, 4-9) takes "th".

@@ -12,10 +12,8 @@ here.
 
 from __future__ import annotations
 
-import re
-
 from epub_to_m4b.book import Paragraph
-from epub_to_m4b.text.lang.tables_en import ABBREVIATIONS
+from epub_to_m4b.text.lang.tables_en import ABBREV_RE
 
 # Sentence-ending punctuation. "." gets extra scrutiny below (abbreviations,
 # decimals); ! ? ; : always end a sentence wherever they appear.
@@ -25,17 +23,11 @@ _BOUNDARY_CHARS = ".!?;:"
 # e.g. the `"` in `He said "stop."` - the boundary is after it, not before.
 _CLOSERS = "\"')]\u201d\u2019"
 
-_ABBREV_TOKENS = tuple(sorted(ABBREVIATIONS, key=len, reverse=True))
-# Matches a known abbreviation ("Mr.", "e.g.", ...) as a whole token, so
-# every period inside it (including the internal ones in "e.g.") can be
-# marked as "not a sentence boundary" below.
-_ABBREV_RE = re.compile(r"(?<!\w)(" + "|".join(re.escape(tok) for tok in _ABBREV_TOKENS) + r")")
-
 
 def _protected_periods(text: str) -> set[int]:
     """Indices of '.' characters that belong to a known abbreviation."""
     protected: set[int] = set()
-    for match in _ABBREV_RE.finditer(text):
+    for match in ABBREV_RE.finditer(text):
         for offset, ch in enumerate(match.group(0)):
             if ch == ".":
                 protected.add(match.start() + offset)
@@ -109,9 +101,13 @@ def _cut_long(piece: str, max_chars: int) -> list[str]:
     return [left, *_cut_long(right, max_chars)]
 
 
+_MERGE_THRESHOLD_RATIO = 0.5
+_MERGE_CEILING_RATIO = 1.5
+
+
 def _merge_short(pieces: list[str], max_chars: int) -> list[str]:
-    threshold = max_chars / 2
-    ceiling = max_chars * 1.5
+    threshold = max_chars * _MERGE_THRESHOLD_RATIO
+    ceiling = max_chars * _MERGE_CEILING_RATIO
     merged: list[str] = []
     i = 0
     n = len(pieces)

@@ -12,11 +12,16 @@ import re
 from num2words import num2words
 
 from epub_to_m4b.text.lang.tables_en import (
+    ABBREV_RE,
     ABBREVIATIONS,
     MONTH_NAMES,
     ORDINAL_SUFFIXES,
     PUNCTUATION_PAIRS,
 )
+
+# Chars of surrounding text checked for year-cue words (e.g. "in", "since",
+# month names) before/after a candidate 4-digit year.
+_YEAR_CONTEXT_CHARS = 24
 
 # ---------------------------------------------------------------------------
 # decades: "1960s" -> "nineteen sixties"
@@ -67,8 +72,8 @@ _WORD_RE = re.compile(r"[A-Za-z']+")  # a run of letters, for tokenizing context
 
 
 def _year_context_ok(text: str, start: int, end: int) -> bool:
-    before = text[max(0, start - 24) : start]
-    after = text[end : end + 24]
+    before = text[max(0, start - _YEAR_CONTEXT_CHARS) : start]
+    after = text[end : end + _YEAR_CONTEXT_CHARS]
     before_words = _WORD_RE.findall(before)
     if before_words:
         last = before_words[-1].lower()
@@ -119,13 +124,13 @@ def years_to_words(text: str) -> str:
 
 # "Chapter"/"Part"/"Book" followed by a roman token, including single letters
 # (I/V/X) which are only converted in this enumerative context.
-_ROMAN_AFTER_CHAPTER_RE = re.compile(r"\b((?i:chapter|part|book))\s+([MDCLXVI]{1,8})\b")
+_ROMAN_AFTER_CHAPTER_RE = re.compile(r"\b((?i:chapter|part|book))\s+([MDCLXVI]{1,9})\b")
 
 # A bare multi-letter roman token elsewhere (e.g. a heading "IV. The Storm").
 # Single letters are excluded here on purpose: a lone "I" is almost always
 # the pronoun and a lone "V"/"X" is almost always a stray letter, not a
 # numeral.
-_ROMAN_STANDALONE_RE = re.compile(r"(?<!\w)([MDCLXVI]{2,8})(?!\w)")
+_ROMAN_STANDALONE_RE = re.compile(r"(?<!\w)([MDCLXVI]{2,9})(?!\w)")
 
 # Validates the candidate is a real roman numeral (rejects junk like "MMMM"
 # or "IIII" that happens to be made of roman letters but isn't a legal
@@ -334,11 +339,6 @@ def numbers_to_words(text: str) -> str:
 # abbreviations, punctuation, hyphenation
 # ---------------------------------------------------------------------------
 
-_ABBREV_TOKENS = tuple(sorted(ABBREVIATIONS, key=len, reverse=True))
-# Longest-first alternation of known abbreviations, e.g. "Mr." / "e.g." -
-# matched as whole tokens so their periods never look like a sentence end.
-_ABBREV_RE = re.compile(r"(?<!\w)(" + "|".join(re.escape(tok) for tok in _ABBREV_TOKENS) + r")")
-
 _MULTI_DASH_RE = re.compile(r"-{2,}")  # runs of hyphens (dashes already normalized to "-") -> one
 _MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")  # repeated spaces left behind by other substitutions
 
@@ -348,7 +348,7 @@ _HYPHEN_BREAK_RE = re.compile(r"(?<=\w)-\s+(?=[a-z])")
 
 
 def expand_abbreviations(text: str) -> str:
-    return _ABBREV_RE.sub(lambda m: ABBREVIATIONS[m.group(1)], text)
+    return ABBREV_RE.sub(lambda m: ABBREVIATIONS[m.group(1)], text)
 
 
 def fix_punctuation(text: str) -> str:

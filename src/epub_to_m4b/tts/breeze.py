@@ -92,6 +92,9 @@ class BreezeEngine(TTSEngine):
     _reference_text: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        # The orchestrator sizes each synthesize() call by max_batch; leaving
+        # the ABC default of 1 would feed the GPU one sentence per request.
+        self.max_batch = self.config.batch_size
         client_kwargs: dict[str, httpx.BaseTransport] = {}
         if self.transport is not None:
             client_kwargs["transport"] = self.transport

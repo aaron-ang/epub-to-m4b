@@ -126,6 +126,9 @@ def test_batch_splitting_respects_batch_size(tmp_path: Path) -> None:
     transport = httpx.MockTransport(handler)
     config = _config(tmp_path, batch_size=3)
     engine = BreezeEngine(config, transport=transport)
+    # The orchestrator only ever passes max_batch texts per call, so a stale
+    # ABC default of 1 here silently degrades the GPU to one sentence per POST.
+    assert engine.max_batch == 3
 
     texts = [f"sentence {i}" for i in range(7)]
     clips = engine.synthesize(texts)

@@ -27,6 +27,10 @@ def test_concat_list_escapes_single_quotes() -> None:
 
 
 def test_concat_command_args() -> None:
+    # Must decode+re-encode (not `-c copy`): each per-chapter FLAC restarts its own
+    # timestamp domain at 0, and stream-copying across that boundary leaves the
+    # concat demuxer unable to restitch a single continuous timeline - the output's
+    # duration silently ends up reflecting only the first file.
     args = concat_command(Path("/tmp/list.txt"), Path("/tmp/out.flac"))
     assert args == [
         "ffmpeg",
@@ -39,10 +43,11 @@ def test_concat_command_args() -> None:
         "0",
         "-i",
         "/tmp/list.txt",
-        "-c",
-        "copy",
+        "-c:a",
+        "flac",
         "/tmp/out.flac",
     ]
+    assert "copy" not in args
 
 
 def test_encode_m4b_command_args() -> None:

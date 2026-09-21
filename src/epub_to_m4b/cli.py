@@ -142,10 +142,11 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
             print(f"[{idx + 1}/{len(book.chapters)}] {chapter.title} — {len(sentences)} sentences")
             pairs = synthesize_chapter(sentences, engine)
             chapter_path = tmp_dir / f"{idx:04d}.flac"
-            offsets = assemble_chapter(pairs, chapter_path, sample_rate=engine.sample_rate)
+            offsets, duration = assemble_chapter(
+                pairs, chapter_path, sample_rate=engine.sample_rate
+            )
             for (sentence, _clip), (start, end) in zip(pairs, offsets, strict=True):
                 cues.append((sentence.text, book_cursor + start, book_cursor + end))
-            duration = offsets[-1][1] if offsets else 0.0
             durations.append(duration)
             chapter_files.append(chapter_path)
             book_cursor += duration

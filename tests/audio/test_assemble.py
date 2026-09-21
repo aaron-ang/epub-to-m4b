@@ -28,18 +28,36 @@ def test_assemble_chapter_computes_offsets_with_gaps(tmp_path: Path) -> None:
         (Sentence(text="b", gap_after=0.0, chapter_index=0), _clip(2.0)),
     ]
     out_path = tmp_path / "chapter.flac"
-    offsets = assemble_chapter(pairs, out_path, sample_rate=_RATE)
+    offsets, duration = assemble_chapter(pairs, out_path, sample_rate=_RATE)
     assert offsets == [(0.0, 1.0), (1.5, 3.5)]
+    assert duration == 3.5
     assert out_path.is_file()
     data, rate = sf.read(out_path)
     assert rate == _RATE
     assert len(data) == int(3.5 * _RATE)
 
 
+def test_assemble_chapter_duration_includes_trailing_gap_after_last_sentence(
+    tmp_path: Path,
+) -> None:
+    # The last sentence's gap_after is still written into the file (a pause
+    # before the next chapter's audio starts) - the returned duration must
+    # include it too, or every later chapter's marker drifts out of sync with
+    # where its audio actually begins in the concatenated book.
+    pairs = [(Sentence(text="a", gap_after=0.25, chapter_index=0), _clip(1.0))]
+    out_path = tmp_path / "chapter.flac"
+    offsets, duration = assemble_chapter(pairs, out_path, sample_rate=_RATE)
+    assert offsets == [(0.0, 1.0)]
+    assert duration == 1.25
+    data, _rate = sf.read(out_path)
+    assert len(data) == int(1.25 * _RATE)
+
+
 def test_assemble_chapter_empty_pairs_still_writes_file(tmp_path: Path) -> None:
     out_path = tmp_path / "empty.flac"
-    offsets = assemble_chapter([], out_path, sample_rate=_RATE)
+    offsets, duration = assemble_chapter([], out_path, sample_rate=_RATE)
     assert offsets == []
+    assert duration > 0
     assert out_path.is_file()
     data, rate = sf.read(out_path)
     assert rate == _RATE

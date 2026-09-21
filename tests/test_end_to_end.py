@@ -45,3 +45,12 @@ def test_convert_produces_playable_m4b_and_vtt(tiny_epub: Path, tmp_path: Path) 
         title = chapter["tags"]["title"]
         assert "[break]" not in title.lower()
         assert "[pause]" not in title.lower()
+
+    # Regression: stream-copying per-chapter FLACs across the concat boundary
+    # left the container's own duration reflecting only the first chapter, even
+    # though the chapters atom (populated independently from ffmetadata) and
+    # every chapter's bytes were correct. Catch that by cross-checking the
+    # container's overall duration against the last chapter's end_time.
+    container_duration = float(probe["format"]["duration"])
+    last_chapter_end = float(chapters[-1]["end_time"])
+    assert container_duration == pytest.approx(last_chapter_end, abs=0.1)

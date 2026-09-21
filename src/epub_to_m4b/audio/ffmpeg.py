@@ -33,6 +33,11 @@ def concat_list(chapter_files: Sequence[Path]) -> str:
 
 
 def concat_command(list_path: Path, output_path: Path) -> list[str]:
+    # Each per-chapter FLAC restarts its own timestamp domain at 0; stream-copying
+    # (`-c copy`) across that boundary leaves the concat demuxer unable to restitch
+    # a single continuous timeline, so the output's STREAMINFO/duration ends up
+    # reflecting only the first file even though every file's bytes are present.
+    # Decoding and re-encoding through the concat instead produces one real stream.
     return [
         FFMPEG,
         "-y",
@@ -44,8 +49,8 @@ def concat_command(list_path: Path, output_path: Path) -> list[str]:
         "0",
         "-i",
         str(list_path),
-        "-c",
-        "copy",
+        "-c:a",
+        "flac",
         str(output_path),
     ]
 

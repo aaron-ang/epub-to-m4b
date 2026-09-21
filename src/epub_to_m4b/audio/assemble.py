@@ -29,8 +29,17 @@ def assemble_chapter(
     out_path: Path,
     *,
     sample_rate: int,
-) -> list[tuple[float, float]]:
-    """Write the chapter to ``out_path`` and return each sentence's (start, end) offset."""
+) -> tuple[list[tuple[float, float]], float]:
+    """Write the chapter to ``out_path``.
+
+    Returns each sentence's (start, end) offset and the chapter's total
+    duration. The total includes the last sentence's trailing gap (if any),
+    since that silence is written into the file too - callers must use this
+    total, not the last sentence's own ``end`` offset, when placing the next
+    chapter's start: undercounting the trailing gap here would leave every
+    later chapter's marker pointing earlier than where its audio actually
+    starts in the concatenated file.
+    """
     offsets: list[tuple[float, float]] = []
     chunks: list[npt.NDArray[np.float32]] = []
     cursor = 0.0
@@ -48,4 +57,5 @@ def assemble_chapter(
     audio = np.concatenate(chunks) if chunks else silence(_MIN_CHAPTER_SECONDS, sample_rate)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(out_path, audio, sample_rate)
-    return offsets
+    duration = len(audio) / sample_rate
+    return offsets, duration

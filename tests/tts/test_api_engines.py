@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from epub_to_m4b.tts.base import TTSEngine
+from epub_to_m4b.tts.elevenlabs import ElevenLabsConfig, ElevenLabsEngine
 from epub_to_m4b.tts.openai_compat import OpenAIConfig, OpenAIEngine
 
 _KEY = "sk-test-key"
@@ -51,7 +52,29 @@ def _openai(
     return OpenAIEngine(config, api_key=api_key, transport=transport, sleep=sleep)
 
 
+def _elevenlabs(
+    transport: httpx.BaseTransport | None = None,
+    *,
+    api_key: str = _KEY,
+    sleep: Callable[[float], None] = lambda _s: None,
+    **overrides: object,
+) -> ElevenLabsEngine:
+    fields: dict[str, object] = {"voice_id": "voice123"}
+    fields.update(overrides)
+    config = ElevenLabsConfig(**fields)  # type: ignore[arg-type]
+    return ElevenLabsEngine(config, api_key=api_key, transport=transport, sleep=sleep)
+
+
 CASES = {
+    "elevenlabs": _Case(
+        make=_elevenlabs,
+        url="https://api.elevenlabs.io/v1/text-to-speech/voice123?output_format=pcm_24000",
+        method="POST",
+        headers={"xi-api-key": _KEY},
+        body=lambda text: {"text": text, "model_id": "eleven_multilingual_v2"},
+        audio_override={"model_id": "eleven_turbo_v2_5"},
+        base_url_override={"base_url": "https://proxy.example"},
+    ),
     "openai": _Case(
         make=_openai,
         url="https://api.openai.com/v1/audio/speech",

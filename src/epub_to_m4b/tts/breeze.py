@@ -105,7 +105,12 @@ class BreezeEngine(TTSEngine):
             transport=self.transport,
         )
         self.sample_rate = self._sidecar.sample_rate
-        self._reference_wav, self._reference_text = self._load_or_create_reference_voice()
+        try:
+            self._reference_wav, self._reference_text = self._load_or_create_reference_voice()
+        except BaseException:
+            self._client.close()
+            self._sidecar.close()
+            raise
 
     def _load_or_create_reference_voice(self) -> tuple[Path, str]:
         ref_dir = self.config.cache_dir / "breeze"

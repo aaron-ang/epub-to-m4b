@@ -105,6 +105,13 @@ def test_batch_splitting_respects_batch_size(tmp_path: Path) -> None:
             fields = _parse_multipart(request)
             texts = json.loads(fields["texts"])
             batch_calls.append(texts)
+            assert fields["instruction"] == config.instruction
+            assert float(fields["cfg_scale"]) == config.cfg_scale
+            assert (
+                fields["ref_text"] == "This is a clear, steady voice reading aloud for narration."
+            )
+            assert int(fields["seed"]) == config.seed
+            assert int(fields["max_new_tokens"]) > 0
             segments = [_pcm_bytes(0.1) for _ in texts]
             return httpx.Response(
                 200,

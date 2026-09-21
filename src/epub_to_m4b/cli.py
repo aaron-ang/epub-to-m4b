@@ -8,8 +8,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from epub_to_m4b import __version__
-from epub_to_m4b.book import Book, ParagraphKind
+from epub_to_m4b.book import Book, Paragraph, ParagraphKind
 from epub_to_m4b.epub.reader import read_book
+from epub_to_m4b.text.normalize import normalize
+from epub_to_m4b.text.split import split_paragraph
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +26,14 @@ def build_parser() -> argparse.ArgumentParser:
     dump = sub.add_parser("dump-text", help="print chapter titles and paragraphs")
     _add_book_args(dump)
     dump.add_argument("--chapter", type=int, default=None, help="1-based chapter index")
+    dump.add_argument(
+        "--normalized", action="store_true", help="run each paragraph through normalize(text)"
+    )
+    dump.add_argument(
+        "--split",
+        action="store_true",
+        help="also show sentence boundaries (implies --normalized)",
+    )
     dump.set_defaults(func=_cmd_dump_text)
     return parser
 
@@ -66,10 +76,16 @@ def _cmd_dump_text(book: Book, args: argparse.Namespace) -> int:
             print(f"error: chapter {args.chapter} out of range 1..{len(chapters)}", file=sys.stderr)
             return 1
         chapters = [chapters[args.chapter - 1]]
+    normalized = args.normalized or args.split
     for n, ch in chapters:
         print(f"=== [{n}] {ch.title}")
         for p in ch.paragraphs:
             prefix = "# " if p.kind is ParagraphKind.HEADING else ""
-            print(f"{prefix}{p.text}")
+            text = normalize(p.text) if normalized else p.text
+            print(f"{prefix}{text}")
+            if args.split:
+                sentence_paragraph = Paragraph(text=text, kind=p.kind)
+                for i, sentence in enumerate(split_paragraph(sentence_paragraph)):
+                    print(f"    [{i}] {sentence}")
         print()
     return 0

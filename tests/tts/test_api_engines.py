@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from epub_to_m4b.tts.base import TTSEngine
+from epub_to_m4b.tts.deepgram import DeepgramConfig, DeepgramEngine
 from epub_to_m4b.tts.elevenlabs import ElevenLabsConfig, ElevenLabsEngine
 from epub_to_m4b.tts.openai_compat import OpenAIConfig, OpenAIEngine
 
@@ -65,7 +66,30 @@ def _elevenlabs(
     return ElevenLabsEngine(config, api_key=api_key, transport=transport, sleep=sleep)
 
 
+def _deepgram(
+    transport: httpx.BaseTransport | None = None,
+    *,
+    api_key: str = _KEY,
+    sleep: Callable[[float], None] = lambda _s: None,
+    **overrides: object,
+) -> DeepgramEngine:
+    config = DeepgramConfig(**overrides)  # type: ignore[arg-type]
+    return DeepgramEngine(config, api_key=api_key, transport=transport, sleep=sleep)
+
+
 CASES = {
+    "deepgram": _Case(
+        make=_deepgram,
+        url=(
+            "https://api.deepgram.com/v1/speak"
+            "?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&container=none"
+        ),
+        method="POST",
+        headers={"Authorization": f"Token {_KEY}"},
+        body=lambda text: {"text": text},
+        audio_override={"model": "aura-2-orion-en"},
+        base_url_override={"base_url": "https://proxy.example"},
+    ),
     "elevenlabs": _Case(
         make=_elevenlabs,
         url="https://api.elevenlabs.io/v1/text-to-speech/voice123?output_format=pcm_24000",

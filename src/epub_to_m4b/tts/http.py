@@ -26,6 +26,8 @@ from epub_to_m4b.tts.base import pcm16_to_float32
 
 _RETRYABLE_STATUSES = frozenset({408, 429})
 _BODY_EXCERPT_CHARS = 200
+# Speech for one sentence takes seconds; connecting should not.
+_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 
 
 class TTSError(Exception):
@@ -41,6 +43,14 @@ class RetryPolicy:
 
 
 DEFAULT_RETRY_POLICY = RetryPolicy()
+
+
+def new_client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
+    """An ``httpx.Client`` with the shared API timeouts; ``transport`` lets
+    tests substitute a ``MockTransport`` for the network."""
+    if transport is None:
+        return httpx.Client(timeout=_TIMEOUT)
+    return httpx.Client(timeout=_TIMEOUT, transport=transport)
 
 
 def _is_retryable(status: int) -> bool:

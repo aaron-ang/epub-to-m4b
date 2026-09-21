@@ -21,6 +21,7 @@ from epub_to_m4b.audio.ffmpeg import (
 from epub_to_m4b.audio.metadata import build_ffmetadata, embed_cover
 from epub_to_m4b.audio.vtt import write_vtt
 from epub_to_m4b.book import Book, Paragraph, ParagraphKind
+from epub_to_m4b.config import ConfigError, load_config
 from epub_to_m4b.epub.reader import read_book
 from epub_to_m4b.synth.orchestrator import GapPolicy, chapter_to_sentences, synthesize_chapter
 from epub_to_m4b.text.normalize import normalize
@@ -56,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_book_args(convert)
     convert.add_argument("--engine", required=True, choices=available_engines())
     convert.add_argument("-o", "--out-dir", type=Path, required=True)
+    convert.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="TOML config file (default: $E2M_CONFIG or ~/.config/epub-to-m4b/config.toml)",
+    )
     convert.set_defaults(func=_cmd_convert)
     return parser
 
@@ -126,13 +133,20 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
     m4b_path = out_dir / f"{slug}.m4b"
     vtt_path = out_dir / f"{slug}.vtt"
 
+    try:
+        app_config = load_config(args.config)
+        engine = create_engine(args.engine, app_config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     policy = GapPolicy()
     cues: list[tuple[str, float, float]] = []
     durations: list[float] = []
     book_cursor = 0.0
 
     with (
-        create_engine(args.engine) as engine,
+        engine,
         tempfile.TemporaryDirectory(prefix="epub-to-m4b-") as tmp_name,
     ):
         tmp_dir = Path(tmp_name)

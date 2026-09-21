@@ -37,3 +37,60 @@ def test_dump_text_bad_chapter(tiny_epub: Path, capsys: pytest.CaptureFixture[st
 def test_missing_file_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["chapters", str(tmp_path / "nope.epub")]) == 1
     assert "cannot read" in capsys.readouterr().err
+
+
+def test_convert_parser_accepts_breeze_engine_and_config_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["convert", "book.epub", "--engine", "breeze", "-o", "out", "--config", "c.toml"]
+    )
+    assert args.engine == "breeze"
+    assert args.config == Path("c.toml")
+
+
+def test_convert_breeze_without_config_table_errors_cleanly(
+    tiny_epub: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    code = main(
+        [
+            "convert",
+            str(tiny_epub),
+            "--engine",
+            "breeze",
+            "-o",
+            str(out_dir),
+            "--config",
+            str(config_path),
+        ]
+    )
+    assert code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "breeze" in err
+    assert not (out_dir / "tiny-book.m4b").exists()
+
+
+def test_convert_breeze_missing_config_file_errors_cleanly(
+    tiny_epub: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out_dir = tmp_path / "out"
+    missing_config = tmp_path / "missing.toml"
+    code = main(
+        [
+            "convert",
+            str(tiny_epub),
+            "--engine",
+            "breeze",
+            "-o",
+            str(out_dir),
+            "--config",
+            str(missing_config),
+        ]
+    )
+    assert code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "not found" in err

@@ -98,8 +98,12 @@ class BreezeEngine(TTSEngine):
         self._client = httpx.Client(**client_kwargs)  # type: ignore[arg-type]
 
         log_path = self.config.cache_dir / f"breeze-server-{self.config.port}.log"
+        # The sidecar's spawn command is engine-agnostic (see tts/sidecar.py) -
+        # it only appends --host/--port. Breeze's server also takes the
+        # weights directory as a required positional arg, so it goes on the
+        # end of the configured command here, not inside sidecar.py.
         self._sidecar = start_or_adopt(
-            self.config.command,
+            [*self.config.command, str(self.config.weights_dir)],
             self.config.port,
             log_path=log_path,
             transport=self.transport,

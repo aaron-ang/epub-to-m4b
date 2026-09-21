@@ -3,7 +3,7 @@ name = "epub-to-m4b"
 version = "0.1.0"
 description = "Turn an EPUB into an M4B audiobook with a WebVTT transcript, using pluggable TTS engines."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 license = { text = "MIT" }
 dependencies = [
     "ebooklib>=0.19",
@@ -40,7 +40,7 @@ default-groups = ["dev"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 src = ["src", "tests"]
 extend-exclude = ["*.md"]
 
@@ -56,7 +56,7 @@ quote-style = "double"
 
 [tool.mypy]
 strict = true
-python_version = "3.12"
+python_version = "3.14"
 packages = ["epub_to_m4b"]
 mypy_path = "src"
 

@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from typing import Any
 
 import httpx
 import numpy as np
@@ -94,7 +95,7 @@ def post_with_retry(
     *,
     policy: RetryPolicy = DEFAULT_RETRY_POLICY,
     sleep: Callable[[float], None] = time.sleep,
-    **request_kwargs: object,
+    **request_kwargs: Any,
 ) -> httpx.Response:
     """POST ``url`` until it returns 2xx, retrying transport errors and
     408/429/5xx with ``Retry-After`` or the policy's backoff schedule in
@@ -104,7 +105,7 @@ def post_with_retry(
     for attempt in range(policy.max_retries + 1):
         last_response = None
         try:
-            response = client.post(url, **request_kwargs)  # type: ignore[arg-type]
+            response = client.post(url, **request_kwargs)
         except httpx.TransportError as exc:
             last_error = exc
         else:

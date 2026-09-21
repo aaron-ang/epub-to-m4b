@@ -24,11 +24,15 @@ import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from epub_to_m4b.tts.breeze import BreezeConfig
 from epub_to_m4b.tts.deepgram import DeepgramConfig
 from epub_to_m4b.tts.elevenlabs import ElevenLabsConfig
 from epub_to_m4b.tts.openai_compat import OpenAIConfig
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 _CONFIG_ENV_VAR = "E2M_CONFIG"
 _CACHE_DIR_ENV_VAR = "E2M_CACHE_DIR"
@@ -122,7 +126,7 @@ def _coerce_command(raw_value: object) -> list[str]:
     return [str(part) for part in raw_value]
 
 
-def _build_engine_config[C](
+def _build_engine_config[C: DataclassInstance](
     table: Mapping[str, object],
     config_cls: type[C],
     *,
@@ -139,7 +143,7 @@ def _build_engine_config[C](
     reads from TOML). ``coerce`` maps a key to a function applied to its raw
     TOML value before construction.
     """
-    accepted = {f.name for f in fields(config_cls)} - set(extra)  # type: ignore[arg-type]
+    accepted = {f.name for f in fields(config_cls)} - set(extra)
     unknown = sorted(set(table) - accepted)
     if unknown:
         raise ConfigError(f"[engine.{section}]: unknown key(s): {', '.join(unknown)}")

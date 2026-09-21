@@ -231,6 +231,41 @@ def test_segment_bytes_header_parsing_splits_pcm_correctly(tmp_path: Path) -> No
         np.testing.assert_array_equal(clip.samples, expected_floats)
 
 
+def test_segment_count_mismatch_raises_clear_error(tmp_path: Path) -> None:
+    # Server returns only 2 segments for 3 requested texts - a precise error
+    # should point at the count mismatch, not surface later as a generic
+    # zip() ValueError once the guard tries to pair clips with texts.
+    segments = [_pcm_bytes(0.1), _pcm_bytes(0.1)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(
+                200,
+                content=_pcm_bytes(1.0),
+                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
+            )
+        if request.url.path == "/v1/audio/speech/batch":
+            return httpx.Response(
+                200,
+                content=b"".join(segments),
+                headers={
+                    "X-Segment-Bytes": ",".join(str(len(s)) for s in segments),
+                    "X-Sample-Rate": str(_SAMPLE_RATE),
+                },
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    transport = httpx.MockTransport(handler)
+    config = _config(tmp_path)
+    engine = BreezeEngine(config, transport=transport)
+
+    with pytest.raises(RuntimeError, match="2 segments"):
+        engine.synthesize(["a", "b", "c"])
+    engine.close()
+
+
 def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
     text = "a runaway sentence"
     retry_limit = guard.retry_limit_seconds(text)

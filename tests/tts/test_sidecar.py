@@ -30,6 +30,26 @@ def _health_transport(responses: list[httpx.Response]) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
+def _spawn_then_transport(responses: list[httpx.Response]) -> httpx.MockTransport:
+    """A MockTransport for the "nothing listening yet" path.
+
+    The very first health check raises a connection error (nothing bound to
+    the port at all), which is the only outcome that should trigger a spawn.
+    Every call after that steps through ``responses`` (repeating the last).
+    """
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        n = calls["n"]
+        calls["n"] += 1
+        if n == 0:
+            raise httpx.ConnectError("connection refused")
+        index = min(n - 1, len(responses) - 1)
+        return responses[index]
+
+    return httpx.MockTransport(handler)
+
+
 def test_adopts_already_healthy_server_without_spawning(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -50,14 +70,17 @@ def test_adopts_already_healthy_server_without_spawning(
     popen.assert_not_called()
 
 
-def test_spawns_and_waits_through_loading(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_spawns_when_nothing_listening_and_waits_through_loading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Connection failure on the very first check - and only that - triggers a spawn."""
     fake_process = MagicMock(spec=subprocess.Popen)
     fake_process.poll.return_value = None
     popen = MagicMock(return_value=fake_process)
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
 
-    transport = _health_transport(
+    transport = _spawn_then_transport(
         [
             _loading(),
             _loading(),
@@ -82,6 +105,28 @@ def test_spawns_and_waits_through_loading(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert log_path.parent.is_dir()
 
 
+def test_adopts_already_running_server_still_loading_on_first_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A real (non-200) response on the first check means something is
+    already bound to the port and mid-startup - it must be adopted, not
+    competed with by spawning a second process on top of it.
+    """
+    popen = MagicMock()
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
+
+    transport = _health_transport([_loading(), _loading(), _ok(24000)])
+    handle = sidecar.start_or_adopt(
+        ["fake-command"], 7861, log_path=tmp_path / "server.log", transport=transport
+    )
+
+    assert handle.owned is False
+    assert handle.process is None
+    assert handle.sample_rate == 24000
+    popen.assert_not_called()
+
+
 def test_spawn_sets_default_triton_ptxas_path_when_unset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -91,12 +136,7 @@ def test_spawn_sets_default_triton_ptxas_path_when_unset(
     popen = MagicMock(return_value=fake_process)
     monkeypatch.setattr(subprocess, "Popen", popen)
 
-    transport = _health_transport(
-        [
-            _loading(),
-            _ok(),
-        ]
-    )
+    transport = _spawn_then_transport([_ok()])
     sidecar.start_or_adopt(
         ["fake-command"], 7861, log_path=tmp_path / "server.log", transport=transport
     )
@@ -114,12 +154,7 @@ def test_spawn_respects_already_set_triton_ptxas_path(
     popen = MagicMock(return_value=fake_process)
     monkeypatch.setattr(subprocess, "Popen", popen)
 
-    transport = _health_transport(
-        [
-            _loading(),
-            _ok(),
-        ]
-    )
+    transport = _spawn_then_transport([_ok()])
     sidecar.start_or_adopt(
         ["fake-command"], 7861, log_path=tmp_path / "server.log", transport=transport
     )
@@ -137,8 +172,9 @@ def test_timeout_raises_with_log_path_in_message(
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
 
-    # Always loading - never becomes healthy.
-    transport = _health_transport([_loading()])
+    # Nothing listening initially (triggers our spawn), then always loading -
+    # never becomes healthy.
+    transport = _spawn_then_transport([_loading()])
     log_path = tmp_path / "server.log"
 
     with pytest.raises(TimeoutError) as exc_info:
@@ -164,7 +200,7 @@ def test_timeout_keeps_spawned_process_terminated_not_adopted(
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
 
-    transport = _health_transport([_loading()])
+    transport = _spawn_then_transport([_loading()])
     with pytest.raises(TimeoutError):
         sidecar.start_or_adopt(
             ["fake-command"],
@@ -175,6 +211,29 @@ def test_timeout_keeps_spawned_process_terminated_not_adopted(
             transport=transport,
         )
     fake_process.terminate.assert_called()
+
+
+def test_timeout_on_adopted_never_healthy_server_terminates_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If we never spawned anything (something else was already there but
+    never becomes healthy), timing out must not reach for a process to kill.
+    """
+    popen = MagicMock()
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
+
+    transport = _health_transport([_loading()])
+    with pytest.raises(TimeoutError):
+        sidecar.start_or_adopt(
+            ["fake-command"],
+            7861,
+            log_path=tmp_path / "server.log",
+            startup_timeout=0.02,
+            poll_interval=0.01,
+            transport=transport,
+        )
+    popen.assert_not_called()
 
 
 def test_connection_refused_is_treated_as_not_running_and_spawns(
@@ -299,12 +358,7 @@ def test_spawn_writes_stdout_stderr_to_log_file(
         return process
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    transport = _health_transport(
-        [
-            _loading(),
-            _ok(),
-        ]
-    )
+    transport = _spawn_then_transport([_ok()])
     log_path = tmp_path / "server.log"
 
     sidecar.start_or_adopt(["fake-command"], 7861, log_path=log_path, transport=transport)

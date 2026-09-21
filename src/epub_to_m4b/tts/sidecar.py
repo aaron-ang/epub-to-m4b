@@ -99,7 +99,16 @@ def start_or_adopt(
     poll_interval: float = _POLL_INTERVAL_SECONDS,
     transport: httpx.BaseTransport | None = None,
 ) -> SidecarHandle:
-    """Adopt an already-healthy server on ``port``, or spawn ``command`` there.
+    """Adopt an already-running server on ``port``, or spawn ``command`` there.
+
+    The initial check distinguishes three outcomes, not two:
+
+    1. Connection failure (nothing listening at all) - we spawn ``command``.
+    2. A real HTTP response that isn't 200 (e.g. 503 loading) - something is
+       already bound to this port and mid-startup. We must not spawn a
+       competing process on top of it; adopt it (``owned=False``) and keep
+       polling the same way we would after our own spawn.
+    3. A real 200 response - adopt immediately, no polling needed.
 
     ``command`` already includes any engine-specific args (e.g. the weights
     directory); this function appends ``--host 127.0.0.1 --port {port}``.
@@ -113,28 +122,35 @@ def start_or_adopt(
         client_kwargs["transport"] = transport
 
     with httpx.Client(**client_kwargs) as client:  # type: ignore[arg-type]
-        response = _poll_health(client, base_url)
-        if response is not None and response.status_code == 200:
-            sample_rate = int(response.json()["sample_rate"])
+        initial = _poll_health(client, base_url)
+        if initial is not None and initial.status_code == 200:
             return SidecarHandle(
                 base_url=base_url,
-                sample_rate=sample_rate,
+                sample_rate=int(initial.json()["sample_rate"]),
                 owned=False,
                 process=None,
                 log_path=log_path,
             )
 
-        process = _spawn(command, port, log_path)
+        process: subprocess.Popen[bytes] | None = None
+        owned = False
+        if initial is None:
+            # Nothing answered at all - the port is genuinely free, spawn ours.
+            process = _spawn(command, port, log_path)
+            owned = True
+        # else: a real, non-200 response (e.g. 503 loading) - something else
+        # already owns this port and is mid-startup; fall through to the
+        # same polling loop without spawning, and adopt it once healthy.
+
         try:
             deadline = time.monotonic() + startup_timeout
             while time.monotonic() < deadline:
                 response = _poll_health(client, base_url)
                 if response is not None and response.status_code == 200:
-                    sample_rate = int(response.json()["sample_rate"])
                     return SidecarHandle(
                         base_url=base_url,
-                        sample_rate=sample_rate,
-                        owned=True,
+                        sample_rate=int(response.json()["sample_rate"]),
+                        owned=owned,
                         process=process,
                         log_path=log_path,
                     )
@@ -147,7 +163,8 @@ def start_or_adopt(
                 f"{startup_timeout:.0f}s; see log at {log_path}"
             )
         except BaseException:
-            _terminate(process)
+            if process is not None:
+                _terminate(process)
             raise
 
 

@@ -155,7 +155,7 @@ class BreezeEngine(TTSEngine):
             "max_new_tokens": guard.max_new_tokens(chunk),
         }
         response = self._post_batch_with_retry(data)
-        return self._split_segments(response)
+        return self._split_segments(response, expected_count=len(chunk))
 
     def _post_batch_with_retry(self, data: dict[str, object]) -> httpx.Response:
         warned = False
@@ -178,11 +178,15 @@ class BreezeEngine(TTSEngine):
         response.raise_for_status()
         return response
 
-    def _split_segments(self, response: httpx.Response) -> list[AudioClip]:
+    def _split_segments(self, response: httpx.Response, *, expected_count: int) -> list[AudioClip]:
         header = response.headers.get("X-Segment-Bytes", "")
         if not header:
             raise RuntimeError("Breeze batch response is missing the X-Segment-Bytes header")
         sizes = [int(value) for value in header.split(",")]
+        if len(sizes) != expected_count:
+            raise RuntimeError(
+                f"Breeze batch response returned {len(sizes)} segments for {expected_count} texts"
+            )
         sample_rate = int(response.headers.get("X-Sample-Rate", self.sample_rate))
         body = response.content
         if sum(sizes) != len(body):

@@ -61,7 +61,15 @@ packages = ["epub_to_m4b"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["ebooklib.*", "soundfile", "mutagen.*", "num2words"]
+module = ["ebooklib.*", "soundfile", "num2words"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# mutagen ships a py.typed marker but its own constructors/methods are
+# untyped, so ignore_missing_imports (for modules mypy can't find at all)
+# has no effect here; skip following it instead so calls resolve to Any.
+module = ["mutagen.*"]
+follow_imports = "skip"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

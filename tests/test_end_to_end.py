@@ -54,3 +54,28 @@ def test_convert_produces_playable_m4b_and_vtt(tiny_epub: Path, tmp_path: Path) 
     container_duration = float(probe["format"]["duration"])
     last_chapter_end = float(chapters[-1]["end_time"])
     assert container_duration == pytest.approx(last_chapter_end, abs=0.1)
+
+
+def test_damaged_m4b_is_rebuilt_even_when_newer_than_every_chapter(
+    tiny_epub: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out_dir = tmp_path / "out"
+    argv = ["convert", str(tiny_epub), "--engine", "silence", "-o", str(out_dir)]
+    assert main(argv) == 0
+    m4b_path = out_dir / "tiny-book.m4b"
+
+    # Simulate an encode that died partway: the file at the real path is
+    # garbage, but its mtime is newer than every chapter flac, so an
+    # mtime-only "is it up to date" check would keep it forever.
+    with m4b_path.open("r+b") as fh:
+        fh.truncate(100)
+    assert main(argv) == 0
+    assert m4b_path.stat().st_size > 100
+    assert len(probe_chapters(m4b_path)["chapters"]) == 2
+    # the encode went through a temp file that was moved into place, not
+    # left behind next to the result.
+    assert not [p for p in out_dir.iterdir() if p.name.startswith(".tiny-book")]
+
+    capsys.readouterr()
+    assert main(argv) == 0
+    assert "already up to date" in capsys.readouterr().out

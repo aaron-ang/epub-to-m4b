@@ -89,3 +89,9 @@ def build_epub(path: Path) -> Path:
 @pytest.fixture
 def tiny_epub(tmp_path: Path) -> Path:
     return build_epub(tmp_path / "tiny.epub")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No test may read or write the real ~/.cache/epub-to-m4b.
+    monkeypatch.setenv("E2M_CACHE_DIR", str(tmp_path / "e2m-cache"))

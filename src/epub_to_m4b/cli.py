@@ -14,6 +14,7 @@ from epub_to_m4b.audio.ffmpeg import (
     concat_command,
     concat_list,
     encode_m4b_command,
+    probe_chapters,
     require_ffmpeg,
     run_command,
 )
@@ -22,6 +23,7 @@ from epub_to_m4b.audio.vtt import write_vtt
 from epub_to_m4b.book import Book, Paragraph, ParagraphKind
 from epub_to_m4b.config import ConfigError, load_config, resolve_cache_dir
 from epub_to_m4b.epub.reader import read_book
+from epub_to_m4b.synth.cache import atomic_replace
 from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
 from epub_to_m4b.text.normalize import normalize
 from epub_to_m4b.text.split import split_paragraph
@@ -132,26 +134,17 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
     m4b_path = out_dir / f"{slug}.m4b"
     vtt_path = out_dir / f"{slug}.vtt"
 
+    cache_dir = resolve_cache_dir()
     try:
-        app_config = load_config(args.config)
+        app_config = load_config(args.config, cache_dir=cache_dir)
         engine = create_engine(args.engine, app_config)
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    policy = GapPolicy()
-
-    def _log_chapter(idx: int, total: int, title: str, n_sentences: int) -> None:
-        print(f"[{idx + 1}/{total}] {title} — {n_sentences} sentences")
-
     with engine:
         results = synthesize_book(
-            book,
-            engine,
-            cache_dir=resolve_cache_dir(),
-            out_dir=out_dir,
-            policy=policy,
-            on_chapter_start=_log_chapter,
+            book, engine, cache_dir=cache_dir, out_dir=out_dir, policy=GapPolicy(), log=print
         )
 
     cues: list[tuple[str, float, float]] = []
@@ -165,10 +158,44 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
         chapter_files.append(result.flac_path)
         book_cursor += result.duration
 
-    m4b_is_stale = not m4b_path.is_file() or any(
-        f.stat().st_mtime > m4b_path.stat().st_mtime for f in chapter_files
-    )
-    if m4b_is_stale:
+    if _m4b_is_current(m4b_path, chapter_files, expected_chapters=len(book.chapters)):
+        print(f"{m4b_path} already up to date, skipping re-encode")
+    else:
+        _write_m4b(book, m4b_path, chapter_files, durations)
+
+    write_vtt(cues, vtt_path)
+    print(f"wrote {m4b_path}")
+    print(f"wrote {vtt_path}")
+    return 0
+
+
+def _m4b_is_current(
+    m4b_path: Path, chapter_files: Sequence[Path], *, expected_chapters: int
+) -> bool:
+    """Newer than every chapter flac *and* a container ffprobe can read with
+    the right chapter count. mtime alone is not enough: an m4b left behind
+    by an interrupted or failed encode could be newer than everything and
+    still be garbage, and would then never be rebuilt."""
+    if not m4b_path.is_file():
+        return False
+    m4b_mtime = m4b_path.stat().st_mtime
+    if any(f.stat().st_mtime > m4b_mtime for f in chapter_files):
+        return False
+    try:
+        probe = probe_chapters(m4b_path)
+    except RuntimeError, ValueError:
+        return False
+    return len(probe.get("chapters", [])) == expected_chapters
+
+
+def _write_m4b(
+    book: Book, m4b_path: Path, chapter_files: Sequence[Path], durations: Sequence[float]
+) -> None:
+    """Concat + encode + cover-embed into a temp file next to ``m4b_path``,
+    then ``os.replace`` it into place, so a crash mid-encode never leaves a
+    partial m4b at the real path."""
+
+    def write_body(tmp_m4b: Path) -> None:
         with tempfile.TemporaryDirectory(prefix="epub-to-m4b-") as tmp_name:
             tmp_dir = Path(tmp_name)
             list_path = tmp_dir / "concat.txt"
@@ -178,14 +205,8 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
 
             metadata_path = tmp_dir / "ffmetadata.txt"
             metadata_path.write_text(build_ffmetadata(book, durations), encoding="utf-8")
-            run_command(encode_m4b_command(combined_path, metadata_path, m4b_path))
-
+            run_command(encode_m4b_command(combined_path, metadata_path, tmp_m4b))
         if book.cover and book.cover_mime:
-            embed_cover(m4b_path, book.cover, book.cover_mime)
-    else:
-        print(f"{m4b_path} already up to date, skipping re-encode")
+            embed_cover(tmp_m4b, book.cover, book.cover_mime)
 
-    write_vtt(cues, vtt_path)
-    print(f"wrote {m4b_path}")
-    print(f"wrote {vtt_path}")
-    return 0
+    atomic_replace(m4b_path, write_body, suffix=".m4b")

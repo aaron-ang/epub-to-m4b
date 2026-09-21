@@ -10,22 +10,12 @@ they land: add the class + a factory that pulls its own field off
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
-from pathlib import Path
 
 from epub_to_m4b.config import AppConfig, ConfigError
 from epub_to_m4b.tts.base import TTSEngine
 from epub_to_m4b.tts.breeze import BreezeEngine
 from epub_to_m4b.tts.fake import SilenceEngine, ToneEngine
-
-# Undocumented, test-only env vars - never set by normal use of the CLI.
-# They exist so a resume/kill-9 test can drive `--engine silence` as a real
-# subprocess (needed for a genuine SIGKILL) while still controlling its
-# pacing and observing what it was asked to synthesize, neither of which is
-# otherwise reachable across a process boundary.
-_SILENCE_DELAY_ENV = "E2M_SILENCE_DELAY_SECONDS"
-_SILENCE_CALL_LOG_ENV = "E2M_SILENCE_CALL_LOG"
 
 
 def _breeze_factory(config: AppConfig) -> TTSEngine:
@@ -38,17 +28,8 @@ def _breeze_factory(config: AppConfig) -> TTSEngine:
     return BreezeEngine(config.breeze)
 
 
-def _silence_factory(_config: AppConfig) -> TTSEngine:
-    delay_raw = os.environ.get(_SILENCE_DELAY_ENV)
-    log_raw = os.environ.get(_SILENCE_CALL_LOG_ENV)
-    return SilenceEngine(
-        delay_seconds=float(delay_raw) if delay_raw else 0.0,
-        call_log_path=Path(log_raw) if log_raw else None,
-    )
-
-
 _ENGINES: dict[str, Callable[[AppConfig], TTSEngine]] = {
-    SilenceEngine.name: _silence_factory,
+    SilenceEngine.name: lambda _config: SilenceEngine(),
     ToneEngine.name: lambda _config: ToneEngine(),
     BreezeEngine.name: _breeze_factory,
 }

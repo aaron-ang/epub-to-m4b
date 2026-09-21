@@ -7,14 +7,16 @@ deterministic ``gap_after`` per the punctuation/position rules below, then
 through ``synth/batching.py``, call the engine, and store each result via
 ``synth/cache.py`` immediately - so a crash after batch N keeps batches
 1..N-1's work safe. Chapter-level assembly is skipped/reused per
-``cache.chapter_is_stale`` if nothing in that chapter changed since the last
-run.
+``cache.current_chapter_manifest`` if nothing in that chapter changed since
+the last run.
+
+Memory stays bounded to one chapter: planning only checks clip *presence*,
+and each chapter's clips (cached or freshly synthesized - both live in the
+cache by then) are loaded from disk just before that chapter is assembled.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,22 +106,6 @@ def chapter_to_sentences(
     return sentences
 
 
-def batch_sentences(sentences: Sequence[Sentence], max_batch: int) -> list[list[Sentence]]:
-    return [list(sentences[i : i + max_batch]) for i in range(0, len(sentences), max_batch)]
-
-
-def synthesize_chapter(
-    sentences: Sequence[Sentence], engine: TTSEngine
-) -> list[tuple[Sentence, AudioClip]]:
-    pairs: list[tuple[Sentence, AudioClip]] = []
-    for batch in batch_sentences(sentences, engine.max_batch):
-        clips = engine.synthesize([s.text for s in batch])
-        if len(clips) != len(batch):
-            raise ValueError(f"engine returned {len(clips)} clips for {len(batch)} texts")
-        pairs.extend(zip(batch, clips, strict=True))
-    return pairs
-
-
 @dataclass(frozen=True, slots=True)
 class ChapterResult:
     """One chapter's durable audio plus what the caller needs to place its
@@ -133,134 +119,172 @@ class ChapterResult:
     cues: tuple[tuple[str, float, float], ...]
 
 
-def _clip_keys_and_gaps(
-    sentences: Sequence[Sentence],
-) -> tuple[tuple[str, ...], tuple[float, ...]]:
-    keys = tuple(cache.clip_cache_key(TEXT_PIPELINE_VERSION, s.text) for s in sentences)
-    gaps = tuple(s.gap_after for s in sentences)
-    return keys, gaps
+Log = Callable[[str], None]
+
+
+def _no_log(_message: str) -> None:
+    return None
 
 
 @dataclass(frozen=True, slots=True)
 class _ChapterPlan:
-    """One chapter's precomputed sentences/keys/gaps, and whether the cached
-    flac for it (if any) is still current."""
+    """One chapter's precomputed sentences/keys/gaps, plus the stored
+    manifest if the cached flac for it is still current (``None`` means the
+    chapter must be assembled this run)."""
 
+    title: str
     sentences: list[Sentence]
     keys: tuple[str, ...]
     gaps: tuple[float, ...]
-    stale: bool
+    manifest: cache.ChapterManifest | None
+
+    @property
+    def current(self) -> bool:
+        return self.manifest is not None
 
 
 def _plan_chapters(
-    book: Book, out_dir: Path, *, policy: GapPolicy, lang: str
+    book: Book,
+    out_dir: Path,
+    *,
+    engine_fingerprint: str,
+    sample_rate: int,
+    policy: GapPolicy,
+    lang: str,
 ) -> list[_ChapterPlan]:
     plans = []
     for idx, chapter in enumerate(book.chapters):
         sentences = chapter_to_sentences(chapter, idx, policy=policy, lang=lang)
-        keys, gaps = _clip_keys_and_gaps(sentences)
-        stale = cache.chapter_is_stale(
-            out_dir, book.source_sha256, idx, clip_keys=keys, gap_after=gaps
+        keys = tuple(cache.clip_cache_key(TEXT_PIPELINE_VERSION, s.text) for s in sentences)
+        gaps = tuple(s.gap_after for s in sentences)
+        manifest = cache.current_chapter_manifest(
+            out_dir,
+            book.source_sha256,
+            idx,
+            engine_fingerprint=engine_fingerprint,
+            sample_rate=sample_rate,
+            clip_keys=keys,
+            gap_after=gaps,
         )
-        plans.append(_ChapterPlan(sentences=sentences, keys=keys, gaps=gaps, stale=stale))
+        plans.append(
+            _ChapterPlan(
+                title=chapter.title, sentences=sentences, keys=keys, gaps=gaps, manifest=manifest
+            )
+        )
     return plans
 
 
-def _resolve_cached_and_pending(
+def _resolve_pending(
     plans: Sequence[_ChapterPlan],
     *,
     cache_dir: Path,
     engine_fingerprint: str,
-) -> tuple[dict[str, AudioClip], list[PendingClip]]:
-    """Look up every stale chapter's sentences against the clip cache,
-    pooling misses across chapter boundaries before any ``synthesize()``
-    call is made."""
-    clip_for_key: dict[str, AudioClip] = {}
+    log: Log,
+) -> list[PendingClip]:
+    """Check every non-current chapter's sentences for clip-cache presence
+    (header only - nothing is decoded), pooling misses across chapter
+    boundaries before any ``synthesize()`` call is made. Logs one line per
+    chapter with its cached/to-synthesize split; a sentence repeated across
+    chapters counts as "to synthesize" in each, but is queued only once."""
     pending: list[PendingClip] = []
+    cached_by_key: dict[str, bool] = {}  # each key is checked on disk at most once
     for idx, plan in enumerate(plans):
-        if not plan.stale:
+        prefix = f"[{idx + 1}/{len(plans)}] {plan.title} — {len(plan.sentences)} sentences"
+        if plan.current:
+            log(f"{prefix}, chapter up to date")
             continue
-        for position, (sentence, key) in enumerate(zip(plan.sentences, plan.keys, strict=True)):
-            if key in clip_for_key:
-                continue
-            hit = cache.load_clip(cache_dir, engine_fingerprint, key)
-            if hit is not None:
-                clip_for_key[key] = hit
-            else:
-                pending.append(
-                    PendingClip(key=key, chapter_index=idx, position=position, text=sentence.text)
-                )
-    return clip_for_key, pending
+        missing = 0
+        for sentence, key in zip(plan.sentences, plan.keys, strict=True):
+            if key not in cached_by_key:
+                cached_by_key[key] = cache.has_clip(cache_dir, engine_fingerprint, key)
+                if not cached_by_key[key]:
+                    pending.append(PendingClip(key=key, text=sentence.text))
+            if not cached_by_key[key]:
+                missing += 1
+        log(f"{prefix}, {len(plan.sentences) - missing} clips cached, {missing} to synthesize")
+    return pending
 
 
 def _synthesize_pending(
     pending: Sequence[PendingClip],
-    clip_for_key: dict[str, AudioClip],
     engine: TTSEngine,
     *,
     cache_dir: Path,
     engine_fingerprint: str,
+    log: Log,
 ) -> None:
     """Run every pending sentence through the engine, length-sorted and
     capped at ``engine.max_batch`` per call, storing each result to the
     clip cache the moment it comes back - so a crash partway through only
     ever costs the in-flight batch's work."""
-    for batch in make_batches(pending, engine.max_batch):
+    batches = make_batches(pending, engine.max_batch)
+    done = 0
+    for n, batch in enumerate(batches, start=1):
         clips = engine.synthesize([item.text for item in batch])
         if len(clips) != len(batch):
             raise ValueError(f"engine returned {len(clips)} clips for {len(batch)} texts")
         for item, clip in zip(batch, clips, strict=True):
             cache.store_clip(cache_dir, engine_fingerprint, item.key, clip)
-            clip_for_key[item.key] = clip
+        done += len(batch)
+        log(f"batch {n}/{len(batches)}, {done}/{len(pending)} clips")
 
 
-def _reuse_chapter(out_dir: Path, book_sha: str, idx: int, plan: _ChapterPlan) -> ChapterResult:
-    manifest = cache.load_chapter_manifest(out_dir, book_sha, idx)
-    assert manifest is not None  # plan.stale is False only when this loaded cleanly
-    cues = tuple(
+def _cues(
+    plan: _ChapterPlan, offsets: Sequence[tuple[float, float]]
+) -> tuple[tuple[str, float, float], ...]:
+    return tuple(
         (sentence.text, start, end)
-        for sentence, (start, end) in zip(plan.sentences, manifest.offsets, strict=True)
+        for sentence, (start, end) in zip(plan.sentences, offsets, strict=True)
     )
+
+
+def _reuse_chapter(
+    out_dir: Path, book_sha: str, idx: int, plan: _ChapterPlan, manifest: cache.ChapterManifest
+) -> ChapterResult:
     flac_path = cache.chapter_flac_path(out_dir, book_sha, idx)
-    return ChapterResult(flac_path=flac_path, duration=manifest.duration, cues=cues)
+    return ChapterResult(
+        flac_path=flac_path, duration=manifest.duration, cues=_cues(plan, manifest.offsets)
+    )
 
 
-def _assemble_chapter_and_store(
+def _assemble_chapter(
     out_dir: Path,
     book_sha: str,
     idx: int,
     plan: _ChapterPlan,
-    clip_for_key: dict[str, AudioClip],
     *,
+    cache_dir: Path,
+    engine_fingerprint: str,
     sample_rate: int,
 ) -> ChapterResult:
-    pairs = [
-        (sentence, clip_for_key[key])
-        for sentence, key in zip(plan.sentences, plan.keys, strict=True)
-    ]
-    chapters_dir = cache.chapter_flac_path(out_dir, book_sha, idx).parent
-    chapters_dir.mkdir(parents=True, exist_ok=True)
-    # Suffix stays ".flac" (not ".flac.tmp") so soundfile can still infer the
-    # format from the extension; the leading dot plus mkstemp's random
-    # component keeps it out of the way of the real "<idx>.flac" path.
-    fd, tmp_name = tempfile.mkstemp(dir=chapters_dir, prefix=f".{idx:04d}.", suffix=".flac")
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        offsets, duration = assemble_chapter(pairs, tmp_path, sample_rate=sample_rate)
-        manifest = cache.ChapterManifest(
-            clip_keys=plan.keys, gap_after=plan.gaps, offsets=tuple(offsets), duration=duration
-        )
-        cache.store_chapter(out_dir, book_sha, idx, audio_source=tmp_path, manifest=manifest)
-    finally:
-        tmp_path.unlink(missing_ok=True)  # no-op once store_chapter has moved it
+    """Load this one chapter's clips from the cache (every one is there by
+    now, cached earlier or stored by ``_synthesize_pending``) and write the
+    assembled flac + manifest through ``cache.store_chapter``."""
+    pairs: list[tuple[Sentence, AudioClip]] = []
+    for sentence, key in zip(plan.sentences, plan.keys, strict=True):
+        clip = cache.load_clip(cache_dir, engine_fingerprint, key)
+        if clip is None:
+            raise RuntimeError(
+                f"clip {key} for chapter {idx} vanished from {cache_dir} between synthesis "
+                "and assembly - rerun to synthesize it again"
+            )
+        pairs.append((sentence, clip))
 
-    flac_path = cache.chapter_flac_path(out_dir, book_sha, idx)
-    cues = tuple(
-        (sentence.text, start, end)
-        for sentence, (start, end) in zip(plan.sentences, offsets, strict=True)
+    def write_audio(tmp_path: Path) -> tuple[cache.Offsets, float]:
+        offsets, duration = assemble_chapter(pairs, tmp_path, sample_rate=sample_rate)
+        return tuple(offsets), duration
+
+    manifest = cache.store_chapter(
+        out_dir,
+        book_sha,
+        idx,
+        engine_fingerprint=engine_fingerprint,
+        sample_rate=sample_rate,
+        clip_keys=plan.keys,
+        gap_after=plan.gaps,
+        write_audio=write_audio,
     )
-    return ChapterResult(flac_path=flac_path, duration=duration, cues=cues)
+    return _reuse_chapter(out_dir, book_sha, idx, plan, manifest)
 
 
 def synthesize_book(
@@ -271,40 +295,54 @@ def synthesize_book(
     out_dir: Path,
     policy: GapPolicy = _DEFAULT_POLICY,
     lang: str = "en",
-    on_chapter_start: Callable[[int, int, str, int], None] | None = None,
+    log: Log = _no_log,
 ) -> list[ChapterResult]:
     """Render every chapter of ``book``, resuming from ``cache_dir`` (clip
     cache, keyed by engine fingerprint + text pipeline version + text) and
     ``out_dir/.work`` (per-chapter flac + manifest) wherever possible.
 
-    Chapters whose sentence set/order is unchanged since the last run (per
-    ``cache.chapter_is_stale``) are skipped entirely - no clip lookups, no
-    ``audio/assemble.py`` call. For the rest: every sentence's cache key is
-    looked up first; hits are loaded from disk, misses are pooled *across
-    all stale chapters* and run through ``synth/batching.py`` so a single
-    ``synthesize()`` call never mixes wildly different sentence lengths.
+    Chapters whose manifest still matches (same engine, sample rate,
+    sentence set/order and gaps - see ``cache.current_chapter_manifest``)
+    are reused as-is. For the rest: every sentence's cache key is checked
+    for presence first; misses are pooled *across all such chapters* and run
+    through ``synth/batching.py`` so a single ``synthesize()`` call never
+    mixes wildly different sentence lengths. Progress goes to ``log`` one
+    line at a time: a cached/to-synthesize split per chapter up front, then
+    one line per engine batch, then one per assembled chapter.
     """
     engine_fingerprint = engine.fingerprint()
+    sample_rate = engine.sample_rate
     book_sha = book.source_sha256
 
-    plans = _plan_chapters(book, out_dir, policy=policy, lang=lang)
-    clip_for_key, pending = _resolve_cached_and_pending(
-        plans, cache_dir=cache_dir, engine_fingerprint=engine_fingerprint
+    plans = _plan_chapters(
+        book,
+        out_dir,
+        engine_fingerprint=engine_fingerprint,
+        sample_rate=sample_rate,
+        policy=policy,
+        lang=lang,
+    )
+    pending = _resolve_pending(
+        plans, cache_dir=cache_dir, engine_fingerprint=engine_fingerprint, log=log
     )
     _synthesize_pending(
-        pending, clip_for_key, engine, cache_dir=cache_dir, engine_fingerprint=engine_fingerprint
+        pending, engine, cache_dir=cache_dir, engine_fingerprint=engine_fingerprint, log=log
     )
 
     results: list[ChapterResult] = []
-    for idx, (chapter, plan) in enumerate(zip(book.chapters, plans, strict=True)):
-        if on_chapter_start is not None:
-            on_chapter_start(idx, len(plans), chapter.title, len(plan.sentences))
-        if plan.stale:
-            results.append(
-                _assemble_chapter_and_store(
-                    out_dir, book_sha, idx, plan, clip_for_key, sample_rate=engine.sample_rate
-                )
-            )
-        else:
-            results.append(_reuse_chapter(out_dir, book_sha, idx, plan))
+    for idx, plan in enumerate(plans):
+        if plan.manifest is not None:
+            results.append(_reuse_chapter(out_dir, book_sha, idx, plan, plan.manifest))
+            continue
+        result = _assemble_chapter(
+            out_dir,
+            book_sha,
+            idx,
+            plan,
+            cache_dir=cache_dir,
+            engine_fingerprint=engine_fingerprint,
+            sample_rate=sample_rate,
+        )
+        log(f"[{idx + 1}/{len(plans)}] assembled {plan.title} ({result.duration:.1f}s)")
+        results.append(result)
     return results

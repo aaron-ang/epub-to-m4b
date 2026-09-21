@@ -6,10 +6,8 @@ pipeline (assembly, chapter markers, VTT) without any real speech model.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -31,25 +29,8 @@ def _duration_seconds(text: str) -> float:
 class SilenceEngine(TTSEngine):
     name: ClassVar[str] = "silence"
     sample_rate: int = 24000
-    # Both default to off and change nothing about normal dry-run behavior.
-    # They exist to make the fake engine observable/controllable from outside
-    # its own process: ``delay_seconds`` spaces out synthesize() calls in
-    # wall-clock time (e.g. so a resume-after-crash test can land a kill
-    # mid-run reliably instead of racing a near-instant fake); ``call_log_path``
-    # appends each requested text to a file, one per call, so a test (or a
-    # curious human) can see exactly what was asked for without instrumenting
-    # the engine in-process - useful across a subprocess boundary where
-    # nothing else can observe it.
-    delay_seconds: float = 0.0
-    call_log_path: Path | None = None
 
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
-        if self.delay_seconds > 0:
-            time.sleep(self.delay_seconds)
-        if self.call_log_path is not None:
-            with self.call_log_path.open("a", encoding="utf-8") as log_file:
-                for text in texts:
-                    log_file.write(text.replace("\n", " ") + "\n")
         clips = []
         for text in texts:
             n_samples = int(_duration_seconds(text) * self.sample_rate)

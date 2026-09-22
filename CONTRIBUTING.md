@@ -16,7 +16,7 @@
 | `make format` | `ruff format` + `ruff check --fix` |
 | `make ci` | Alias of `make check`; the CI workflow runs this |
 
-GPU and paid-API tests are excluded by default (`-m 'not gpu and not network'`).
+Sidecar and paid-API tests are excluded by default (`-m 'not sidecar and not network'`).
 
 ## Conventions
 

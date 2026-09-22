@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import time
+import os
 import wave
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -29,7 +29,13 @@ from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.base import TTSEngine, pcm16_to_float32
 from epub_to_m4b.tts.http import TTSError
-from epub_to_m4b.tts.sidecar import SidecarHandle, start_or_adopt
+from epub_to_m4b.tts.sidecar import (
+    DEFAULT_SIDECAR_POLICY,
+    SidecarHandle,
+    SidecarPolicy,
+    post_until_free,
+    start_or_adopt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +43,9 @@ _DEFAULT_INSTRUCTION = "A clear, neutral adult narrator voice with a calm, stead
 # Fixed reference text read once to bootstrap a consistent narrator voice;
 # without a reference, Breeze samples a new voice per call.
 _REFERENCE_TEXT = "This is a clear, steady voice reading aloud for narration."
-_REFERENCE_TIMEOUT_SECONDS = 300.0
-# A full batch decodes for minutes, not seconds.
-_BATCH_TIMEOUT_SECONDS = 1800.0
-_BUSY_STATUS = 409
-_BUSY_RETRIES = 60
-_BUSY_WAIT_SECONDS = 5.0
+# Breeze's server uses triton, which needs ptxas on its path. A Breeze/CUDA
+# detail, so it lives here rather than in the engine-agnostic tts/sidecar.py.
+_SIDECAR_ENV = {"TRITON_PTXAS_PATH": "/usr/local/cuda/bin/ptxas"}
 
 
 @dataclass(frozen=True)
@@ -89,8 +92,7 @@ class BreezeEngine(TTSEngine):
 
     config: BreezeConfig
     transport: httpx.BaseTransport | None = None
-    busy_retries: int = _BUSY_RETRIES
-    busy_wait_seconds: float = _BUSY_WAIT_SECONDS
+    policy: SidecarPolicy = DEFAULT_SIDECAR_POLICY
 
     sample_rate: int = field(init=False)
     _sidecar: SidecarHandle = field(init=False, repr=False)
@@ -116,6 +118,9 @@ class BreezeEngine(TTSEngine):
             [*self.config.command, str(self.config.weights_dir)],
             self.config.port,
             log_path=log_path,
+            policy=self.policy,
+            # A variable the user already exported wins over our default.
+            env={k: v for k, v in _SIDECAR_ENV.items() if k not in os.environ},
             transport=self.transport,
         )
         self.sample_rate = self._sidecar.sample_rate
@@ -141,7 +146,7 @@ class BreezeEngine(TTSEngine):
                 "cfg_scale": self.config.cfg_scale,
                 "seed": self.config.seed,
             },
-            timeout=_REFERENCE_TIMEOUT_SECONDS,
+            timeout=self.policy.request_timeout,
         )
         response.raise_for_status()
         _write_wav(ref_wav, response.content, self.sample_rate)
@@ -177,23 +182,23 @@ class BreezeEngine(TTSEngine):
         return self._split_segments(response, expected_count=len(chunk))
 
     def _post_batch_with_retry(self, data: dict[str, object]) -> httpx.Response:
-        warned = False
-        response: httpx.Response | None = None
-        for attempt in range(self.busy_retries + 1):
+        def send() -> httpx.Response:
+            # Reopen per attempt: httpx consumes the file body on each POST.
             with self._reference_wav.open("rb") as ref_audio_file:
-                response = self._client.post(
+                return self._client.post(
                     f"{self._sidecar.base_url}/v1/audio/speech/batch",
                     data=data,
                     files={"ref_audio": ("reference_voice.wav", ref_audio_file, "audio/wav")},
-                    timeout=_BATCH_TIMEOUT_SECONDS,
+                    timeout=self.policy.batch_timeout,
                 )
-            if response.status_code != _BUSY_STATUS or attempt == self.busy_retries:
-                break
-            if not warned:
-                logger.info("Breeze server busy, waiting for the running inference to finish")
-                warned = True
-            time.sleep(self.busy_wait_seconds)
-        assert response is not None  # loop always runs at least once
+
+        response = post_until_free(
+            send,
+            policy=self.policy,
+            on_busy=lambda: logger.info(
+                "Breeze server busy, waiting for the running inference to finish"
+            ),
+        )
         response.raise_for_status()
         return response
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import email
 import json
+import subprocess
 from email.message import Message
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import httpx
 import numpy as np
@@ -12,6 +14,7 @@ import pytest
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.breeze import BreezeConfig, BreezeEngine
 from epub_to_m4b.tts.http import TTSError
+from epub_to_m4b.tts.sidecar import SidecarPolicy
 
 _SAMPLE_RATE = 24000
 
@@ -171,7 +174,9 @@ def test_409_triggers_wait_and_retry(tmp_path: Path) -> None:
 
     transport = httpx.MockTransport(handler)
     config = _config(tmp_path)
-    engine = BreezeEngine(config, transport=transport, busy_retries=5, busy_wait_seconds=0.0)
+    engine = BreezeEngine(
+        config, transport=transport, policy=SidecarPolicy(busy_retries=5, busy_wait=0.0)
+    )
 
     (clip,) = engine.synthesize(["one sentence"])
     engine.close()
@@ -196,7 +201,9 @@ def test_409_exhausts_retries_and_raises(tmp_path: Path) -> None:
 
     transport = httpx.MockTransport(handler)
     config = _config(tmp_path)
-    engine = BreezeEngine(config, transport=transport, busy_retries=2, busy_wait_seconds=0.0)
+    engine = BreezeEngine(
+        config, transport=transport, policy=SidecarPolicy(busy_retries=2, busy_wait=0.0)
+    )
 
     with pytest.raises(httpx.HTTPStatusError):
         engine.synthesize(["one sentence"])
@@ -480,3 +487,56 @@ def test_close_stops_owned_sidecar_but_not_adopted(tmp_path: Path) -> None:
     engine = BreezeEngine(config, transport=transport)
     assert engine._sidecar.owned is False
     engine.close()  # must not raise
+
+
+def _spawning_transport() -> httpx.MockTransport:
+    """First /health refuses (nothing listening -> spawn), then healthy."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("connection refused")
+            return _health_response()
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(
+                200,
+                content=_pcm_bytes(1.0),
+                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    return httpx.MockTransport(handler)
+
+
+def test_spawn_sets_default_triton_ptxas_path_when_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("TRITON_PTXAS_PATH", raising=False)
+    fake_process = MagicMock(spec=subprocess.Popen)
+    fake_process.poll.return_value = None
+    popen = MagicMock(return_value=fake_process)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    engine = BreezeEngine(_config(tmp_path), transport=_spawning_transport())
+    engine.close()
+
+    env = popen.call_args.kwargs["env"]
+    assert env["TRITON_PTXAS_PATH"] == "/usr/local/cuda/bin/ptxas"
+
+
+def test_spawn_respects_already_set_triton_ptxas_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TRITON_PTXAS_PATH", "/custom/ptxas")
+    fake_process = MagicMock(spec=subprocess.Popen)
+    fake_process.poll.return_value = None
+    popen = MagicMock(return_value=fake_process)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    engine = BreezeEngine(_config(tmp_path), transport=_spawning_transport())
+    engine.close()
+
+    env = popen.call_args.kwargs["env"]
+    assert env["TRITON_PTXAS_PATH"] == "/custom/ptxas"

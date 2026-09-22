@@ -91,10 +91,10 @@ disallow_untyped_calls = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "gpu: needs a running Breeze sidecar and CUDA",
+    "sidecar: needs a running local TTS sidecar server",
     "network: hits a paid API",
 ]
-addopts = "-m 'not gpu and not network'"
+addopts = "-m 'not sidecar and not network'"
 
 [tool.coverage.run]
 source = ["epub_to_m4b"]

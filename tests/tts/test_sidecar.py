@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -127,9 +128,37 @@ def test_adopts_already_running_server_still_loading_on_first_check(
     popen.assert_not_called()
 
 
-def test_spawn_sets_default_triton_ptxas_path_when_unset(
+def test_spawn_layers_caller_env_over_process_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("KEEP_ME", "from-parent")
+    monkeypatch.setenv("OVERRIDE_ME", "from-parent")
+    fake_process = MagicMock(spec=subprocess.Popen)
+    fake_process.poll.return_value = None
+    popen = MagicMock(return_value=fake_process)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    transport = _spawn_then_transport([_ok()])
+    sidecar.start_or_adopt(
+        ["fake-command"],
+        7861,
+        log_path=tmp_path / "server.log",
+        env={"OVERRIDE_ME": "from-caller", "ONLY_CALLER": "x"},
+        transport=transport,
+    )
+
+    env = popen.call_args.kwargs["env"]
+    assert env["KEEP_ME"] == "from-parent"
+    assert env["OVERRIDE_ME"] == "from-caller"
+    assert env["ONLY_CALLER"] == "x"
+
+
+def test_spawn_without_env_passes_process_env_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """sidecar.py is engine-agnostic: no engine-specific variables (e.g.
+    TRITON_PTXAS_PATH) are injected here - that is the engine's job.
+    """
     monkeypatch.delenv("TRITON_PTXAS_PATH", raising=False)
     fake_process = MagicMock(spec=subprocess.Popen)
     fake_process.poll.return_value = None
@@ -142,25 +171,8 @@ def test_spawn_sets_default_triton_ptxas_path_when_unset(
     )
 
     env = popen.call_args.kwargs["env"]
-    assert env["TRITON_PTXAS_PATH"] == "/usr/local/cuda/bin/ptxas"
-
-
-def test_spawn_respects_already_set_triton_ptxas_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("TRITON_PTXAS_PATH", "/custom/ptxas")
-    fake_process = MagicMock(spec=subprocess.Popen)
-    fake_process.poll.return_value = None
-    popen = MagicMock(return_value=fake_process)
-    monkeypatch.setattr(subprocess, "Popen", popen)
-
-    transport = _spawn_then_transport([_ok()])
-    sidecar.start_or_adopt(
-        ["fake-command"], 7861, log_path=tmp_path / "server.log", transport=transport
-    )
-
-    env = popen.call_args.kwargs["env"]
-    assert env["TRITON_PTXAS_PATH"] == "/custom/ptxas"
+    assert "TRITON_PTXAS_PATH" not in env
+    assert env == dict(os.environ)
 
 
 def test_timeout_raises_with_log_path_in_message(
@@ -182,8 +194,7 @@ def test_timeout_raises_with_log_path_in_message(
             ["fake-command"],
             7861,
             log_path=log_path,
-            startup_timeout=0.05,
-            poll_interval=0.01,
+            policy=sidecar.SidecarPolicy(startup_timeout=0.05, poll_interval=0.01),
             transport=transport,
         )
 
@@ -206,8 +217,7 @@ def test_timeout_keeps_spawned_process_terminated_not_adopted(
             ["fake-command"],
             7861,
             log_path=tmp_path / "server.log",
-            startup_timeout=0.02,
-            poll_interval=0.01,
+            policy=sidecar.SidecarPolicy(startup_timeout=0.02, poll_interval=0.01),
             transport=transport,
         )
     fake_process.terminate.assert_called()
@@ -229,8 +239,7 @@ def test_timeout_on_adopted_never_healthy_server_terminates_nothing(
             ["fake-command"],
             7861,
             log_path=tmp_path / "server.log",
-            startup_timeout=0.02,
-            poll_interval=0.01,
+            policy=sidecar.SidecarPolicy(startup_timeout=0.02, poll_interval=0.01),
             transport=transport,
         )
     popen.assert_not_called()
@@ -365,3 +374,69 @@ def test_spawn_writes_stdout_stderr_to_log_file(
 
     assert captured["stderr"] == subprocess.STDOUT
     assert log_path.exists()
+
+
+def _busy() -> httpx.Response:
+    return httpx.Response(409, json={"detail": "busy"})
+
+
+def test_post_until_free_retries_busy_then_returns_success() -> None:
+    responses = iter([_busy(), _busy(), httpx.Response(200, content=b"pcm")])
+    sleeps: list[float] = []
+    on_busy = MagicMock()
+    policy = sidecar.SidecarPolicy(busy_retries=5, busy_wait=0.25)
+
+    response = sidecar.post_until_free(
+        lambda: next(responses), policy=policy, on_busy=on_busy, sleep=sleeps.append
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"pcm"
+    on_busy.assert_called_once()
+    assert sleeps == [0.25, 0.25]
+
+
+def test_post_until_free_exhausted_returns_last_busy_response() -> None:
+    calls = {"n": 0}
+
+    def send() -> httpx.Response:
+        calls["n"] += 1
+        return _busy()
+
+    sleeps: list[float] = []
+    policy = sidecar.SidecarPolicy(busy_retries=2, busy_wait=0.0)
+
+    response = sidecar.post_until_free(send, policy=policy, sleep=sleeps.append)
+
+    assert response.status_code == 409
+    assert calls["n"] == policy.busy_retries + 1
+    assert len(sleeps) == policy.busy_retries
+
+
+def test_post_until_free_returns_non_busy_immediately() -> None:
+    calls = {"n": 0}
+
+    def send() -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(500)
+
+    on_busy = MagicMock()
+    sleep = MagicMock()
+
+    response = sidecar.post_until_free(
+        send, policy=sidecar.SidecarPolicy(), on_busy=on_busy, sleep=sleep
+    )
+
+    assert response.status_code == 500
+    assert calls["n"] == 1
+    on_busy.assert_not_called()
+    sleep.assert_not_called()
+
+
+def test_post_until_free_honours_custom_busy_status() -> None:
+    responses = iter([httpx.Response(503), httpx.Response(200)])
+    policy = sidecar.SidecarPolicy(busy_status=503, busy_retries=1, busy_wait=0.0)
+
+    response = sidecar.post_until_free(lambda: next(responses), policy=policy, sleep=lambda _: None)
+
+    assert response.status_code == 200

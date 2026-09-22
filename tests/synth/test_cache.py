@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import os
+import stat
 from pathlib import Path
 
 import numpy as np
@@ -148,6 +150,36 @@ def test_clip_path_partitions_by_first_16_chars_of_fingerprint(tmp_path: Path) -
     other_fp = "x" * 16 + "y" * 24  # same first 16 chars, different tail
     key = cache.clip_cache_key("v1", "hello")
     assert cache.clip_path(tmp_path, long_fp, key) == cache.clip_path(tmp_path, other_fp, key)
+
+
+# --- permissions -----------------------------------------------------------
+
+
+def _current_umask() -> int:
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
+def _assert_umask_derived_mode(path: Path) -> None:
+    umask = _current_umask()
+    mode = stat.S_IMODE(path.stat().st_mode)
+    assert mode == 0o666 & ~umask
+    if umask != 0o077:
+        # mkstemp's 0600 must not leak through to the landed file.
+        assert mode != 0o600
+
+
+def test_atomic_replace_lands_file_with_umask_derived_mode(tmp_path: Path) -> None:
+    final = tmp_path / "out.bin"
+    cache.atomic_replace(final, lambda p: p.write_bytes(b"data"))
+    _assert_umask_derived_mode(final)
+
+
+def test_store_clip_lands_flac_with_umask_derived_mode(tmp_path: Path) -> None:
+    key = cache.clip_cache_key("v1", "hello")
+    cache.store_clip(tmp_path, _FP, key, _clip())
+    _assert_umask_derived_mode(cache.clip_path(tmp_path, _FP, key))
 
 
 # --- chapter manifest / staleness -----------------------------------------

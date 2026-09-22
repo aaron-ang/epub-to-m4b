@@ -41,6 +41,19 @@ from epub_to_m4b.book import AudioClip
 CLIP_KEY_LENGTH = 32
 FINGERPRINT_DIR_LENGTH = 16
 
+
+def _read_umask() -> int:
+    # os.umask can only be read by setting it; do the toggle once at import
+    # so concurrent writer threads never see a transiently zeroed umask.
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
+# What a plain ``open(path, "wb")`` would produce - mkstemp always uses 0600,
+# which would otherwise leak onto every landed clip, chapter and m4b.
+_LANDED_FILE_MODE = 0o666 & ~_read_umask()
+
 Offsets = tuple[tuple[float, float], ...]
 
 
@@ -81,6 +94,7 @@ def atomic_replace(
     tmp_path = Path(tmp_name)
     try:
         write_body(tmp_path)
+        os.chmod(tmp_path, _LANDED_FILE_MODE)
         os.replace(tmp_path, final_path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)

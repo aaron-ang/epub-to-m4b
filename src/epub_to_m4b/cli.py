@@ -12,7 +12,6 @@ from pathlib import Path
 
 from epub_to_m4b import __version__
 from epub_to_m4b.audio.ffmpeg import (
-    FFmpegNotFoundError,
     concat_command,
     concat_list,
     encode_m4b_command,
@@ -23,7 +22,7 @@ from epub_to_m4b.audio.ffmpeg import (
 from epub_to_m4b.audio.metadata import build_ffmetadata, embed_cover
 from epub_to_m4b.audio.vtt import write_vtt
 from epub_to_m4b.book import Book, Paragraph, ParagraphKind
-from epub_to_m4b.config import ConfigError, load_config, resolve_cache_dir
+from epub_to_m4b.config import load_config, resolve_cache_dir
 from epub_to_m4b.epub.reader import read_book
 from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth.cache import atomic_replace
@@ -150,10 +149,16 @@ def _slugify(title: str) -> str:
 
 def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
     try:
-        require_ffmpeg()
-    except FFmpegNotFoundError as exc:
+        return _convert(book, args)
+    except EpubToM4bError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+
+def _convert(book: Book, args: argparse.Namespace) -> int:
+    """Convert with no error handling; ``_cmd_convert`` turns every
+    :class:`EpubToM4bError` into the ``error: ...`` exit."""
+    require_ffmpeg()
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _slugify(book.title)
@@ -161,12 +166,8 @@ def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
     vtt_path = out_dir / f"{slug}.vtt"
 
     cache_dir = resolve_cache_dir()
-    try:
-        app_config = load_config(args.config, cache_dir=cache_dir)
-        engine = create_engine(args.engine, app_config)
-    except ConfigError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    app_config = load_config(args.config, cache_dir=cache_dir)
+    engine = create_engine(args.engine, app_config)
 
     def log(message: str) -> None:
         # Renders run for hours under nohup/redirect; block-buffered stdout

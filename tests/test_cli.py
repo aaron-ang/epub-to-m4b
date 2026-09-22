@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
+from epub_to_m4b.book import AudioClip
 from epub_to_m4b.cli import build_parser, main
+from epub_to_m4b.tts.base import TTSEngine
+from epub_to_m4b.tts.http import TTSError
 
 
 def test_parser_builds() -> None:
@@ -154,3 +158,45 @@ def test_main_leaves_third_party_loggers_quiet(
     capsys.readouterr()
     logging.getLogger("httpx").info("GET /health")
     assert capsys.readouterr().err == ""
+
+
+class _ExplodingEngine(TTSEngine):
+    name: ClassVar[str] = "exploding"
+    sample_rate: int = 24000
+
+    def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
+        raise TTSError("boom")
+
+    def fingerprint(self) -> str:
+        return "exploding"
+
+
+def test_convert_tts_error_after_retries_errors_cleanly(
+    tiny_epub: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("epub_to_m4b.cli.require_ffmpeg", lambda: None)
+    monkeypatch.setattr("epub_to_m4b.cli.create_engine", lambda _name, _config: _ExplodingEngine())
+    out_dir = tmp_path / "out"
+    code = main(["convert", str(tiny_epub), "--engine", "silence", "-o", str(out_dir)])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "error: boom" in err
+    assert "Traceback" not in err
+
+
+def test_convert_keyboard_interrupt_propagates(
+    tiny_epub: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _InterruptingEngine(_ExplodingEngine):
+        def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("epub_to_m4b.cli.require_ffmpeg", lambda: None)
+    monkeypatch.setattr(
+        "epub_to_m4b.cli.create_engine", lambda _name, _config: _InterruptingEngine()
+    )
+    with pytest.raises(KeyboardInterrupt):
+        main(["convert", str(tiny_epub), "--engine", "silence", "-o", str(tmp_path / "out")])

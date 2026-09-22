@@ -18,6 +18,19 @@ uv run epub-to-m4b convert book.epub --engine silence -o out/
 
 `silence` renders a silent `.m4b`. Speech needs an `[engine.<name>]` table in `config.toml`; see [Configuration](#configuration).
 
+```toml
+# ~/.config/epub-to-m4b/config.toml
+[engine.openai]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini-tts"
+voice = "alloy"
+```
+
+```bash
+export OPENAI_API_KEY=...
+uv run epub-to-m4b convert book.epub --engine openai -o out/
+```
+
 ## Example
 
 ```
@@ -47,14 +60,14 @@ Chapter markers in the rendered file (`ffprobe -show_chapters out/outliers-the-s
 
 ## Engines
 
-| Engine       | Runs where                                        | Needs                                                            | Cost                                 | Notes                                          |
-|--------------|---------------------------------------------------|------------------------------------------------------------------|--------------------------------------|------------------------------------------------|
-| `breeze`     | Local GPU sidecar (spawned or adopted on `port`)  | Model weights + `breeze-infer-api` server `command` in config    | Free                                 | Batched (`batch_size`); resume-friendly        |
-| `openai`     | Any OpenAI-compatible `/v1/audio/speech` endpoint | API key in the env var named by `api_key_env`                    | Per character, provider pricing      | `base_url`, `model`, `voice` required          |
-| `elevenlabs` | Cloud                                             | API key in the env var named by `api_key_env`                    | Per character, provider pricing      | `voice_id` required                            |
-| `deepgram`   | Cloud                                             | API key in the env var named by `api_key_env`                    | Per character, provider pricing      | Config table optional                          |
-| `silence`    | Local                                             | Nothing                                                          | Free                                 | Pipeline dry runs; silent clips                |
-| `tone`       | Local                                             | Nothing                                                          | Free                                 | Pipeline dry runs; sine-tone clips             |
+| Engine       | Runs where                                                                           | Needs                                                         | Cost                            | Notes                                   |
+|--------------|--------------------------------------------------------------------------------------|---------------------------------------------------------------|---------------------------------|-----------------------------------------|
+| `openai`     | Any OpenAI-compatible `/v1/audio/speech` endpoint                                    | API key in the env var named by `api_key_env`                 | Per character, provider pricing | `base_url`, `model`, `voice` required   |
+| `deepgram`   | Cloud                                                                                | API key in the env var named by `api_key_env`                 | Per character, provider pricing | Config table optional                   |
+| `elevenlabs` | Cloud                                                                                | API key in the env var named by `api_key_env`                 | Per character, provider pricing | `voice_id` required                     |
+| `breeze`     | Self-hosted GPU sidecar (separate `breeze-tts` server, spawned or adopted on `port`) | Model weights + `breeze-infer-api` server `command` in config | Free                            | Batched (`batch_size`); resume-friendly |
+| `silence`    | Local                                                                                | Nothing                                                       | Free                            | Pipeline dry runs; silent clips         |
+| `tone`       | Local                                                                                | Nothing                                                       | Free                            | Pipeline dry runs; sine-tone clips      |
 
 ## Usage
 
@@ -115,6 +128,35 @@ Only `[engine.<name>]` tables are read. Unknown keys, missing required keys, and
 | `ELEVENLABS_API_KEY` | API key for `elevenlabs` (name set by `api_key_env`)     |
 | `DEEPGRAM_API_KEY`   | API key for `deepgram` (name set by `api_key_env`)       |
 
+`[engine.openai]`
+
+| Key           | Type   | Default              | Required |
+|---------------|--------|----------------------|----------|
+| `base_url`    | string |                      | ✓        |
+| `model`       | string |                      | ✓        |
+| `voice`       | string |                      | ✓        |
+| `speed`       | float  | `1.0`                |          |
+| `api_key_env` | string | `"OPENAI_API_KEY"`   |          |
+
+`[engine.deepgram]` (table optional)
+
+| Key           | Type   | Default                      | Required |
+|---------------|--------|------------------------------|----------|
+| `model`       | string | `"aura-2-thalia-en"`         |          |
+| `base_url`    | string | `"https://api.deepgram.com"` |          |
+| `api_key_env` | string | `"DEEPGRAM_API_KEY"`         |          |
+
+`[engine.elevenlabs]`
+
+| Key           | Type   | Default                       | Required |
+|---------------|--------|-------------------------------|----------|
+| `voice_id`    | string |                               | ✓        |
+| `model_id`    | string | `"eleven_multilingual_v2"`    |          |
+| `base_url`    | string | `"https://api.elevenlabs.io"` |          |
+| `api_key_env` | string | `"ELEVENLABS_API_KEY"`        |          |
+
+**Self-hosted: Breeze**
+
 `[engine.breeze]`
 
 | Key           | Type     | Default                                                                 | Required |
@@ -129,48 +171,21 @@ Only `[engine.<name>]` tables are read. Unknown keys, missing required keys, and
 
 `command` is the argv that starts the server; `weights_dir` and `--host`/`--port` are appended. A server already listening on `port` is adopted instead of spawned.
 
-`[engine.openai]`
-
-| Key           | Type   | Default              | Required |
-|---------------|--------|----------------------|----------|
-| `base_url`    | string |                      | ✓        |
-| `model`       | string |                      | ✓        |
-| `voice`       | string |                      | ✓        |
-| `speed`       | float  | `1.0`                |          |
-| `api_key_env` | string | `"OPENAI_API_KEY"`   |          |
-
-`[engine.elevenlabs]`
-
-| Key           | Type   | Default                       | Required |
-|---------------|--------|-------------------------------|----------|
-| `voice_id`    | string |                               | ✓        |
-| `model_id`    | string | `"eleven_multilingual_v2"`    |          |
-| `base_url`    | string | `"https://api.elevenlabs.io"` |          |
-| `api_key_env` | string | `"ELEVENLABS_API_KEY"`        |          |
-
-`[engine.deepgram]` (table optional)
-
-| Key           | Type   | Default                      | Required |
-|---------------|--------|------------------------------|----------|
-| `model`       | string | `"aura-2-thalia-en"`         |          |
-| `base_url`    | string | `"https://api.deepgram.com"` |          |
-| `api_key_env` | string | `"DEEPGRAM_API_KEY"`         |          |
-
 ```toml
-[engine.breeze]
-weights_dir = "/path/to/breeze-tts-2"
-command = ["uv", "run", "--directory", "/path/to/breeze-tts", "breeze-infer-api"]
-
 [engine.openai]
 base_url = "https://api.openai.com/v1"
 model = "gpt-4o-mini-tts"
 voice = "alloy"
 
+[engine.deepgram]
+model = "aura-2-thalia-en"
+
 [engine.elevenlabs]
 voice_id = "..."
 
-[engine.deepgram]
-model = "aura-2-thalia-en"
+[engine.breeze]
+weights_dir = "/path/to/breeze-tts-2"
+command = ["uv", "run", "--directory", "/path/to/breeze-tts", "breeze-infer-api"]
 ```
 
 ## Output
@@ -192,11 +207,11 @@ model = "aura-2-thalia-en"
 | Symptom                                                                                      | Fix                                                                                                                          |
 |----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
 | `error: required on PATH but not found: ffmpeg, ffprobe`                                     | Install ffmpeg; both `ffmpeg` and `ffprobe` must be on `PATH`                                                                |
-| `error: engine 'breeze' selected but no [engine.breeze] table was found - ...`               | Add the `[engine.breeze]` table to the config file, or pass `--config PATH` to a file that has it                            |
 | `error: environment variable OPENAI_API_KEY is not set (needed for engine 'openai')`         | `export` the variable named by that engine's `api_key_env`                                                                   |
+| `error: engine 'breeze' selected but no [engine.breeze] table was found - ...`               | Add the `[engine.breeze]` table to the config file, or pass `--config PATH` to a file that has it                            |
+| Resume re-synthesizes every sentence                                                         | Engine settings changed (new fingerprint) or code in `text/normalize.py`, `text/split.py`, `text/lang/*` changed (new `TEXT_PIPELINE_VERSION`) |
 | `error: server on port 7861 did not become healthy within 180s; see log at ...`               | Read `<cache_dir>/breeze-server-<port>.log`; check `command`, `weights_dir`, and whether another process holds `port`         |
 | `Breeze server busy, waiting for the running inference to finish` (stderr, once per batch)    | Another client holds the server's single inference slot; the run waits (up to 60 retries, 5 s apart) and continues on its own |
-| Resume re-synthesizes every sentence                                                         | Engine settings changed (new fingerprint) or code in `text/normalize.py`, `text/split.py`, `text/lang/*` changed (new `TEXT_PIPELINE_VERSION`) |
 
 ## Development
 

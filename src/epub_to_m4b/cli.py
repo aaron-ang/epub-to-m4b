@@ -86,6 +86,8 @@ def _configure_logging() -> None:
     package_logger = logging.getLogger("epub_to_m4b")
     if package_logger.handlers:
         return
+    # Binds the stream object that is current at call time, not the module
+    # attribute, so a later reassignment of sys.stderr is not followed.
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(message)s"))
     package_logger.addHandler(handler)

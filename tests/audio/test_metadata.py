@@ -2,20 +2,14 @@ from __future__ import annotations
 
 from epub_to_m4b.audio.metadata import build_ffmetadata
 from epub_to_m4b.book import Book, Chapter
+from tests.helpers import make_book
 
 
 def _book(title: str, author: str | None, chapter_titles: list[str]) -> Book:
-    chapters = tuple(
+    chapters = [
         Chapter(title=t, paragraphs=(), source_ids=(f"c{i}",)) for i, t in enumerate(chapter_titles)
-    )
-    return Book(
-        title=title,
-        author=author,
-        cover=None,
-        cover_mime=None,
-        chapters=chapters,
-        source_sha256="deadbeef",
-    )
+    ]
+    return make_book(chapters, title=title, author=author, source_sha256="deadbeef")
 
 
 def test_build_ffmetadata_basic() -> None:

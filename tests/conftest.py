@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import xhtml
+
 CONTAINER_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
@@ -55,20 +57,12 @@ TOC_NCX = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-def _xhtml(body: str) -> str:
-    return (
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>'
-        f"<body>{body}</body></html>"
-    )
-
-
 LONG = " ".join(["Words fill the page and the narrator reads them aloud."] * 6)
 
 DOCS = {
-    "title.xhtml": _xhtml("<h1>Tiny Book</h1><p>Ada Author</p>"),
-    "ch1.xhtml": _xhtml(f"<h1>Chapter One</h1><p>{LONG}</p><p>{LONG}</p>"),
-    "ch2.xhtml": _xhtml(f'<h1 id="top">Chapter Two</h1><p>{LONG}</p>'),
+    "title.xhtml": xhtml("<h1>Tiny Book</h1><p>Ada Author</p>"),
+    "ch1.xhtml": xhtml(f"<h1>Chapter One</h1><p>{LONG}</p><p>{LONG}</p>"),
+    "ch2.xhtml": xhtml(f'<h1 id="top">Chapter Two</h1><p>{LONG}</p>'),
 }
 
 COVER_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16 + b"\xff\xd9"

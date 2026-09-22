@@ -37,6 +37,7 @@ import soundfile as sf
 from epub_to_m4b.audio.ffmpeg import probe_chapters
 from epub_to_m4b.synth.cache import clip_cache_key
 from epub_to_m4b.text import TEXT_PIPELINE_VERSION
+from tests.helpers import xhtml
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -82,14 +83,6 @@ sys.exit(cli.main(__ARGV__))
 """
 
 
-def _xhtml(body: str) -> str:
-    return (
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>'
-        f"<body>{body}</body></html>"
-    )
-
-
 def _chapter_sentence(chapter_index: int, sentence_index: int) -> str:
     # Long and distinct enough that (a) the splitter's short-fragment merge
     # leaves each one standing alone and (b) no two sentences anywhere in
@@ -118,7 +111,7 @@ def _build_resume_epub(path: Path) -> Path:
         doc_id = f"ch{c}"
         href = f"{doc_id}.xhtml"
         sentences = " ".join(_chapter_sentence(c, i) for i in range(_SENTENCES_PER_CHAPTER))
-        docs[href] = _xhtml(f"<h1>Chapter {c}</h1><p>{sentences}</p>")
+        docs[href] = xhtml(f"<h1>Chapter {c}</h1><p>{sentences}</p>")
         manifest_items.append(
             f'<item id="{doc_id}" href="{href}" media-type="application/xhtml+xml"/>'
         )

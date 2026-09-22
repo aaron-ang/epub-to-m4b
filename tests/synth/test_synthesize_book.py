@@ -15,6 +15,7 @@ from epub_to_m4b.book import AudioClip, Book, Chapter, Paragraph, ParagraphKind
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
 from epub_to_m4b.tts.base import TTSEngine
+from tests.helpers import make_book
 
 # Long enough that the splitter's orphan-short-fragment merge doesn't fold
 # them back into one sentence (mirrors tests/synth/test_orchestrator.py).
@@ -60,12 +61,10 @@ def _chapter(i: int, second_sentence: str = _S2) -> Chapter:
 
 
 def _book(*, n_chapters: int = 2) -> Book:
-    return Book(
+    return make_book(
+        [_chapter(i) for i in range(n_chapters)],
         title="Test Book",
         author="Author",
-        cover=None,
-        cover_mime=None,
-        chapters=tuple(_chapter(i) for i in range(n_chapters)),
         source_sha256=_SHA,
     )
 

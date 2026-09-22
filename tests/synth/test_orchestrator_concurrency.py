@@ -19,6 +19,7 @@ from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.orchestrator import synthesize_book
 from epub_to_m4b.text import TEXT_PIPELINE_VERSION
 from epub_to_m4b.tts.base import TTSEngine
+from tests.helpers import make_book
 
 _SHA = "book-sha-concurrency"
 
@@ -36,9 +37,7 @@ def _book(n_sentences: int) -> Book:
         ),
         source_ids=("c0",),
     )
-    return Book(
-        title="T", author="A", cover=None, cover_mime=None, chapters=(chapter,), source_sha256=_SHA
-    )
+    return make_book([chapter], title="T", author="A", source_sha256=_SHA)
 
 
 @dataclass

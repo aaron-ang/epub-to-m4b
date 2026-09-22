@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import logging
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import ClassVar
 
 import pytest
 
+from epub_to_m4b import __version__
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.cli import build_parser, main
 from epub_to_m4b.tts.base import TTSEngine
@@ -213,3 +215,13 @@ def test_convert_help_documents_every_flag(capsys: pytest.CaptureFixture[str]) -
     assert "merge into a neighbour (default: 200)" in out
     assert "TTS engine (see README for configuration)" in out
     assert "directory for the .m4b and .vtt" in out
+
+
+def test_version_flag_prints_installed_package_version(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert __version__ == importlib.metadata.version("epub-to-m4b")
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out.strip() == __version__

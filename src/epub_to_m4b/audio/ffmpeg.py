@@ -17,10 +17,14 @@ FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 
 
+class FFmpegNotFoundError(RuntimeError):
+    """ffmpeg and/or ffprobe is not on PATH."""
+
+
 def require_ffmpeg() -> None:
     missing = [name for name in (FFMPEG, FFPROBE) if shutil.which(name) is None]
     if missing:
-        raise RuntimeError(f"required on PATH but not found: {', '.join(missing)}")
+        raise FFmpegNotFoundError(f"required on PATH but not found: {', '.join(missing)}")
 
 
 def concat_list(chapter_files: Sequence[Path]) -> str:

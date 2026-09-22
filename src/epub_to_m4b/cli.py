@@ -11,6 +11,7 @@ from pathlib import Path
 
 from epub_to_m4b import __version__
 from epub_to_m4b.audio.ffmpeg import (
+    FFmpegNotFoundError,
     concat_command,
     concat_list,
     encode_m4b_command,
@@ -127,7 +128,11 @@ def _slugify(title: str) -> str:
 
 
 def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
-    require_ffmpeg()
+    try:
+        require_ffmpeg()
+    except FFmpegNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _slugify(book.title)

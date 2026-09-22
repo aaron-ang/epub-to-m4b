@@ -94,3 +94,20 @@ def test_convert_breeze_missing_config_file_errors_cleanly(
     err = capsys.readouterr().err
     assert err.startswith("error:")
     assert "not found" in err
+
+
+def test_convert_missing_ffmpeg_errors_cleanly(
+    tiny_epub: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    out_dir = tmp_path / "out"
+    code = main(["convert", str(tiny_epub), "--engine", "silence", "-o", str(out_dir)])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "ffmpeg" in err
+    assert "Traceback" not in err
+    assert not out_dir.exists()

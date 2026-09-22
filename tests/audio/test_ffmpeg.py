@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from epub_to_m4b.audio.ffmpeg import (
+    FFmpegNotFoundError,
     concat_command,
     concat_list,
     encode_m4b_command,
@@ -92,7 +93,7 @@ def test_ffprobe_chapters_command_args() -> None:
 
 def test_require_ffmpeg_raises_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("shutil.which", lambda _name: None)
-    with pytest.raises(RuntimeError, match="ffmpeg"):
+    with pytest.raises(FFmpegNotFoundError, match="ffmpeg"):
         require_ffmpeg()
 
 

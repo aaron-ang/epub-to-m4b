@@ -200,3 +200,16 @@ def test_convert_keyboard_interrupt_propagates(
     )
     with pytest.raises(KeyboardInterrupt):
         main(["convert", str(tiny_epub), "--engine", "silence", "-o", str(tmp_path / "out")])
+
+
+def test_convert_help_documents_every_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["convert", "--help"])
+    assert excinfo.value.code == 0
+    # argparse wraps long help lines at the terminal width; compare unwrapped.
+    out = " ".join(capsys.readouterr().out.split())
+    assert "path to the .epub file" in out
+    assert "TOC nesting level that starts a new chapter (default: 1)" in out
+    assert "merge into a neighbour (default: 200)" in out
+    assert "TTS engine (see README for configuration)" in out
+    assert "directory for the .m4b and .vtt" in out

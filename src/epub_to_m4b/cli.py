@@ -35,15 +35,27 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="epub-to-m4b")
+    parser = argparse.ArgumentParser(
+        prog="epub-to-m4b", description="Turn an EPUB into an M4B audiobook with a VTT transcript."
+    )
     parser.add_argument("--version", action="version", version=__version__)
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", title="commands")
 
-    chapters = sub.add_parser("chapters", help="list detected chapters")
+    chapters = sub.add_parser(
+        "chapters",
+        help="list detected chapters",
+        description="Print the chapter table the converter would narrate, with paragraph and "
+        "character counts, so TOC depth and merge threshold can be tuned before rendering.",
+    )
     _add_book_args(chapters)
     chapters.set_defaults(func=_cmd_chapters)
 
-    dump = sub.add_parser("dump-text", help="print chapter titles and paragraphs")
+    dump = sub.add_parser(
+        "dump-text",
+        help="print chapter titles and paragraphs",
+        description="Print the text of every chapter (or one chapter) as the narrator will see "
+        "it, optionally after normalisation and sentence splitting.",
+    )
     _add_book_args(dump)
     dump.add_argument("--chapter", type=int, default=None, help="1-based chapter index")
     dump.add_argument(
@@ -56,10 +68,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dump.set_defaults(func=_cmd_dump_text)
 
-    convert = sub.add_parser("convert", help="render an audiobook (m4b + vtt) with chapter markers")
+    convert = sub.add_parser(
+        "convert",
+        help="render an audiobook (m4b + vtt) with chapter markers",
+        description="Synthesise every chapter with the chosen TTS engine and write an .m4b with "
+        "chapter markers plus a WebVTT transcript into the output directory.",
+    )
     _add_book_args(convert)
-    convert.add_argument("--engine", required=True, choices=available_engines())
-    convert.add_argument("-o", "--out-dir", type=Path, required=True)
+    convert.add_argument(
+        "--engine",
+        required=True,
+        choices=available_engines(),
+        help="TTS engine (see README for configuration)",
+    )
+    convert.add_argument(
+        "-o", "--out-dir", type=Path, required=True, help="directory for the .m4b and .vtt"
+    )
     convert.add_argument(
         "--config",
         type=Path,
@@ -71,9 +95,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_book_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("epub", type=Path)
-    parser.add_argument("--toc-depth", type=int, default=1)
-    parser.add_argument("--min-chars", type=int, default=200)
+    parser.add_argument("epub", type=Path, help="path to the .epub file")
+    parser.add_argument(
+        "--toc-depth",
+        type=int,
+        default=1,
+        help="TOC nesting level that starts a new chapter (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--min-chars",
+        type=int,
+        default=200,
+        help="chapters with less body text than this merge into a neighbour (default: %(default)s)",
+    )
 
 
 def _configure_logging() -> None:

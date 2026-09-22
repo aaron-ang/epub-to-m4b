@@ -2,6 +2,16 @@
 
 Module layout, interfaces, and conventions for contributors. Usage: [README.md](README.md).
 
+## Pipeline
+
+```
+epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrator ─> audio/assemble ─> audio/ffmpeg ─> <out_dir>/<slug>.m4b
+  (Book)        (Chapter[])       (Sentence[])              │        ↕            (chapter FLAC)  └> audio/vtt ─> <out_dir>/<slug>.vtt
+                                                            ▼        │
+                                                          tts/*  synth/cache ◄─► <cache_dir>/clips/<fingerprint>/<key>.flac        (clips, shared across books)
+                                                       (AudioClip)           ◄─► <out_dir>/.work/<book>/chapters/<idx>.{flac,json}  (assembled chapters, per book)
+```
+
 ## Layout
 
 | Path                     | Responsibility                                                                      |
@@ -9,6 +19,7 @@ Module layout, interfaces, and conventions for contributors. Usage: [README.md](
 | `cli.py`                 | argparse: `chapters` / `dump-text` / `convert`; m4b freshness check; atomic encode  |
 | `config.py`              | Config path resolution; `[engine.*]` tables -> `AppConfig`; `E2M_CACHE_DIR`         |
 | `book.py`                | `Book`, `Chapter`, `Paragraph`, `Sentence`, `AudioClip`                             |
+| `errors.py`              | `EpubToM4bError`: base for user-facing errors; CLI prints `error: <message>`, exit 1 |
 | `epub/reader.py`         | ebooklib -> `Book` (DC metadata, cover, spine docs)                                 |
 | `epub/html.py`           | BeautifulSoup(lxml) DOM walk -> `list[Paragraph]`                                   |
 | `epub/chapters.py`       | TOC -> spine mapping, heading fallback, running-header removal, stub merge          |
@@ -120,6 +131,8 @@ Python 3.14 (`requires-python`, `.python-version`, ruff `py314`, mypy `python_ve
 ```bash
 make check      # ruff check + ruff format --check + mypy --strict + pytest
 make format     # ruff format + ruff check --fix
+make coverage   # pytest --cov --cov-report=term-missing
+make ci         # alias of make check
 ```
 
 | pytest marker | Meaning                                  | Run with                   |

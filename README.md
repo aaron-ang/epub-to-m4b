@@ -2,15 +2,59 @@
 
 Turn an EPUB into an M4B audiobook with chapter markers, cover art, and a WebVTT transcript.
 
-## Install
+[![CI](https://github.com/aaron-ang/epub-to-m4b/actions/workflows/ci.yml/badge.svg)](https://github.com/aaron-ang/epub-to-m4b/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](pyproject.toml)
 
-- Python 3.14
-- [uv](https://docs.astral.sh/uv/)
-- `ffmpeg` and `ffprobe` on `PATH`
+## Quick start
+
+Requires Python 3.14, [uv](https://docs.astral.sh/uv/), and `ffmpeg` + `ffprobe` on `PATH`.
 
 ```bash
-uv sync
+git clone https://github.com/aaron-ang/epub-to-m4b && cd epub-to-m4b && uv sync
+uv run epub-to-m4b chapters book.epub
+uv run epub-to-m4b convert book.epub --engine silence -o out/
 ```
+
+`silence` renders a silent `.m4b`. Speech needs an `[engine.<name>]` table in `config.toml`; see [Configuration](#configuration).
+
+## Example
+
+```
+$ uv run epub-to-m4b chapters outliers.epub
+Outliers the story of success — Gladwell Malcolm (14 chapters)
+  #  title                                               paras    chars  docs
+  1  INTRODUCTION — The Roseto Mystery                      27    12584     3
+  2  CHAPTER ONE                                            65    26263     8
+  3  CHAPTER TWO                                            76    33493     7
+  4  THE 10,000-HOUR RULE                                   26     9883     1
+  5  CHAPTER THREE                                          79    32187     7
+  6  CHAPTER FOUR                                           97    38108     8
+  7  CHAPTER FIVE                                           44    20923     7
+  8  Lesson Number Two:Demographic Luck                     97    45529    10
+  …
+```
+
+Chapter markers in the rendered file (`ffprobe -show_chapters out/outliers-the-story-of-success.m4b`), first 5 of 14:
+
+```
+00:00:00 → INTRODUCTION — The Roseto Mystery
+00:14:12 → CHAPTER ONE
+00:43:47 → CHAPTER TWO
+01:22:00 → THE 10,000-HOUR RULE
+01:34:37 → CHAPTER THREE
+```
+
+## Engines
+
+| Engine       | Runs where                                        | Needs                                                            | Cost                                 | Notes                                          |
+|--------------|---------------------------------------------------|------------------------------------------------------------------|--------------------------------------|------------------------------------------------|
+| `breeze`     | Local GPU sidecar (spawned or adopted on `port`)  | Model weights + `breeze-infer-api` server `command` in config    | Free                                 | Batched (`batch_size`); resume-friendly        |
+| `openai`     | Any OpenAI-compatible `/v1/audio/speech` endpoint | API key in the env var named by `api_key_env`                    | Per character, provider pricing      | `base_url`, `model`, `voice` required          |
+| `elevenlabs` | Cloud                                             | API key in the env var named by `api_key_env`                    | Per character, provider pricing      | `voice_id` required                            |
+| `deepgram`   | Cloud                                             | API key in the env var named by `api_key_env`                    | Per character, provider pricing      | Config table optional                          |
+| `silence`    | Local                                             | Nothing                                                          | Free                                 | Pipeline dry runs; silent clips                |
+| `tone`       | Local                                             | Nothing                                                          | Free                                 | Pipeline dry runs; sine-tone clips             |
 
 ## Usage
 
@@ -43,6 +87,8 @@ Flags shared by all subcommands:
 | `--toc-depth N` | `1`     | Deepest TOC level whose entries start chapters |
 | `--min-chars N` | `200`   | Chapters with fewer body chars merge into the next one (a trailing stub into the previous) |
 
+`--version` prints the package version.
+
 ```bash
 uv run epub-to-m4b chapters book.epub
 uv run epub-to-m4b dump-text book.epub --chapter 3 --split
@@ -58,7 +104,7 @@ Config file resolution, first match wins:
 2. `E2M_CONFIG` (must exist)
 3. `~/.config/epub-to-m4b/config.toml` (optional)
 
-Only `[engine.<name>]` tables are read. Unknown keys and missing required keys are errors.
+Only `[engine.<name>]` tables are read. Unknown keys, missing required keys, and values of the wrong TOML type are errors.
 `silence` and `tone` take no configuration.
 
 | Env var              | Purpose                                                  |
@@ -81,7 +127,7 @@ Only `[engine.<name>]` tables are read. Unknown keys and missing required keys a
 | `cfg_scale`   | float    | `4.0`                                                                   |          |
 | `seed`        | int      | `42`                                                                    |          |
 
-`command` is the argv that starts the server; `--host`/`--port` are appended. A server already listening on `port` is adopted instead of spawned.
+`command` is the argv that starts the server; `weights_dir` and `--host`/`--port` are appended. A server already listening on `port` is adopted instead of spawned.
 
 `[engine.openai]`
 
@@ -141,10 +187,27 @@ model = "aura-2-thalia-en"
 - Changing engine, voice, model, or other audio settings, or editing the text pipeline source (`text/normalize.py`, `text/split.py`, `text/lang/*`), stops old clips being reused. Old clips stay on disk.
 - A missing or damaged `.m4b` is rebuilt; an up-to-date one is kept and only the `.vtt` is rewritten.
 
+## Troubleshooting
+
+| Symptom                                                                                      | Fix                                                                                                                          |
+|----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
+| `error: required on PATH but not found: ffmpeg, ffprobe`                                     | Install ffmpeg; both `ffmpeg` and `ffprobe` must be on `PATH`                                                                |
+| `error: engine 'breeze' selected but no [engine.breeze] table was found - ...`               | Add the `[engine.breeze]` table to the config file, or pass `--config PATH` to a file that has it                            |
+| `error: environment variable OPENAI_API_KEY is not set (needed for engine 'openai')`         | `export` the variable named by that engine's `api_key_env`                                                                   |
+| `TimeoutError: server on port 7861 did not become healthy within 180s; see log at ...`        | Read `<cache_dir>/breeze-server-<port>.log`; check `command`, `weights_dir`, and whether another process holds `port`         |
+| `Breeze server busy, waiting for the running inference to finish` (stderr, once per batch)    | Another client holds the server's single inference slot; the run waits (up to 60 retries, 5 s apart) and continues on its own |
+| Resume re-synthesizes every sentence                                                         | Engine settings changed (new fingerprint) or code in `text/normalize.py`, `text/split.py`, `text/lang/*` changed (new `TEXT_PIPELINE_VERSION`) |
+
 ## Development
 
 ```bash
 make check   # ruff check, ruff format --check, mypy --strict, pytest
 ```
 
-See [AGENTS.md](AGENTS.md) for module layout and conventions.
+## Contributing
+
+Workflow and checks: [CONTRIBUTING.md](CONTRIBUTING.md). Module layout and conventions: [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE).

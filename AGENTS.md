@@ -1,55 +1,50 @@
 # AGENTS.md
 
-Architecture and conventions for anyone (human or agent) working on this repo.
-For what the tool does and how to run it, see [README.md](README.md).
-
-## Why this exists
-
-A small, typed, well-tested tool for turning an EPUB into an M4B audiobook:
-one job per module, no dead code, no UI dependencies dragged into headless
-runs, deterministic resume (no randomness in pause lengths), clean chapter
-titles (no stray markup leaking through), and TTS engines kept behind one
-narrow interface so a new backend is a new file, not a rewrite.
+Module layout, interfaces, and conventions for contributors. Usage: [README.md](README.md).
 
 ## Layout
 
-```
-src/epub_to_m4b/
-  cli.py                 argparse: chapters / dump-text / convert; m4b freshness check, atomic encode
-  config.py              --config > E2M_CONFIG > ~/.config/epub-to-m4b/config.toml; [engine.*] tables -> AppConfig
-  book.py               Book, Chapter, Paragraph, Sentence, AudioClip
-  epub/reader.py         ebooklib -> Book (DC metadata, cover, spine docs)
-  epub/html.py            BeautifulSoup(lxml) DOM walk -> list[Paragraph]
-  epub/chapters.py        TOC->spine mapping, heading fallback, running-header removal, stub merge
-  text/__init__.py       TEXT_PIPELINE_VERSION: sha256 of the text pipeline's own sources
-  text/normalize.py      normalize(text, lang) -> str, dispatch to text/lang/<lang>.py
-  text/lang/english.py    decades, years, ordinals, roman (headings), clock, math, thousands, abbreviations
-  text/lang/tables_en.py  lookup tables for english.py
-  text/split.py           Paragraph -> list[str]; char cap; hard/soft/space/hard-cut; short merge
-  tts/base.py            TTSEngine ABC, pcm16<->float32 helpers, fingerprint_digest
-  tts/registry.py         name -> factory(AppConfig); reads API keys from env, nothing else does
-  tts/http.py             retrying POST helper for API engines (backoff, Retry-After); rate limiting left to the server
-  tts/guard.py            pure runaway-clip budget math: retry/cut limits, max_new_tokens, cut_and_fade, apply_guard
-  tts/sidecar.py          spawn/adopt a local HTTP TTS server, health poll, log file
-  tts/breeze.py           BreezeEngine: batch endpoint, 409 wait, reference voice, guard
-  tts/openai_compat.py    OpenAI-compatible /v1/audio/speech
-  tts/elevenlabs.py       ElevenLabs /v1/text-to-speech/{voice}
-  tts/deepgram.py         Deepgram Aura /v1/speak
-  tts/fake.py             SilenceEngine, ToneEngine for tests and dry runs
-  synth/cache.py         content-addressed flac store, atomic writes, invalidation
-  synth/batching.py       length-sorted windows across chapters
-  synth/orchestrator.py   sentences -> missing -> batches -> engine -> cache; gap policy
-  audio/assemble.py      clips + gaps -> chapter flac; records offsets
-  audio/ffmpeg.py         pure command builders + subprocess: concat, ffmetadata, aac encode, ffprobe
-  audio/metadata.py       ffmetadata text (title/artist/album/chapters), mutagen cover
-  audio/vtt.py            (text, start, end) cues -> WEBVTT
-```
+| Path                     | Responsibility                                                                      |
+|--------------------------|-------------------------------------------------------------------------------------|
+| `cli.py`                 | argparse: `chapters` / `dump-text` / `convert`; m4b freshness check; atomic encode  |
+| `config.py`              | Config path resolution; `[engine.*]` tables -> `AppConfig`; `E2M_CACHE_DIR`         |
+| `book.py`                | `Book`, `Chapter`, `Paragraph`, `Sentence`, `AudioClip`                             |
+| `epub/reader.py`         | ebooklib -> `Book` (DC metadata, cover, spine docs)                                 |
+| `epub/html.py`           | BeautifulSoup(lxml) DOM walk -> `list[Paragraph]`                                   |
+| `epub/chapters.py`       | TOC -> spine mapping, heading fallback, running-header removal, stub merge          |
+| `text/__init__.py`       | `TEXT_PIPELINE_VERSION`: sha256 of the docstring-stripped AST of the text pipeline  |
+| `text/normalize.py`      | `normalize(text, lang="en") -> str`; dispatches to `text/lang/<lang>.py`            |
+| `text/lang/english.py`   | Decades, years, ordinals, roman numerals (headings), clock, math, thousands, abbreviations |
+| `text/lang/tables_en.py` | Lookup tables for `english.py`                                                      |
+| `text/split.py`          | `Paragraph -> list[str]`; char cap; hard/soft/space/hard-cut; short merge           |
+| `tts/base.py`            | `TTSEngine` ABC, pcm16 <-> float32 helpers, `fingerprint_digest`                    |
+| `tts/registry.py`        | name -> factory(`AppConfig`); the only place API keys are read from env             |
+| `tts/http.py`            | Retrying POST for API engines (backoff, `Retry-After`)                              |
+| `tts/guard.py`           | Runaway-clip budget math: retry/cut limits, `max_new_tokens`, `cut_and_fade`, `apply_guard` |
+| `tts/sidecar.py`         | Spawn or adopt a local HTTP TTS server; health poll; log file                       |
+| `tts/breeze.py`          | `BreezeEngine`: batch endpoint, 409 wait, reference voice, guard                    |
+| `tts/openai_compat.py`   | OpenAI-compatible `/v1/audio/speech`                                                |
+| `tts/elevenlabs.py`      | ElevenLabs `/v1/text-to-speech/{voice}`                                             |
+| `tts/deepgram.py`        | Deepgram Aura `/v1/speak`                                                           |
+| `tts/fake.py`            | `SilenceEngine`, `ToneEngine` for tests and dry runs                                |
+| `synth/cache.py`         | Content-addressed FLAC store, chapter manifests, atomic writes, invalidation        |
+| `synth/batching.py`      | Length-sorted windows across chapters                                               |
+| `synth/orchestrator.py`  | sentences -> missing -> batches -> engine -> cache; `GapPolicy`                     |
+| `audio/assemble.py`      | clips + gaps -> chapter FLAC; records offsets                                       |
+| `audio/ffmpeg.py`        | Command builders + subprocess: concat, ffmetadata, AAC encode, ffprobe              |
+| `audio/metadata.py`      | ffmetadata text (title/artist/album/chapters); mutagen cover                        |
+| `audio/vtt.py`           | `(text, start, end)` cues -> WEBVTT                                                 |
 
-Rules:
-- Engines never see files, SSML tags, or silence. The orchestrator owns gaps between clips.
+## Conventions
+
+- Engines receive plain text only: no files, SSML, or silence. The orchestrator owns gaps.
 - `audio/` owns files; everything upstream works with in-memory dataclasses.
-- No inline `[break]`/`[pause]` markers anywhere — gaps are a `Sentence.gap_after` float, computed
-  deterministically from punctuation, so resume never depends on randomness.
+- No inline `[break]`/`[pause]` markers. Gaps are `Sentence.gap_after`, computed deterministically from punctuation.
+- API keys come from the env var named by `api_key_env`, read in `tts/registry.py` only. Never in TOML, never in engines.
+- Engine-specific behaviour (Breeze guard, 409 wait, reference voice) lives in that engine's module, not the ABC.
+- Adopted sidecar servers are never killed on `close()`.
+- Clips, chapter FLACs, manifests, and the `.m4b` land via `synth/cache.py:atomic_replace` (temp file + `os.replace`).
+- No plugin/entry-point mechanism; engines are registered in `_ENGINES`.
 
 ## Data model
 
@@ -70,85 +65,70 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 
 ## TTS engine interface
 
-```python
-class TTSEngine(ABC):
-    name: ClassVar[str]
-    sample_rate: int
-    max_batch: int = 1          # texts per synthesize() call
-    max_concurrency: int = 1    # parallel synthesize() calls allowed
-    @abstractmethod
-    def synthesize(self, texts: Sequence[str]) -> list[AudioClip]: ...
-    @abstractmethod
-    def fingerprint(self) -> str: ...  # digest of engine+model+voice+params; cache directory partition
-    def close(self) -> None: ...
-    # __enter__/__exit__ call close(); the CLI uses `with engine:`
-```
+`TTSEngine(ABC)` in `tts/base.py`:
 
-Engines: `silence`, `tone` (no config), `breeze`, `openai`, `elevenlabs`,
-`deepgram`. The orchestrator sizes each `synthesize()` call by `max_batch`
-and fans batches over a thread pool when `max_concurrency > 1` (the hosted
-APIs); everything else runs sequentially.
+| Member                                              | Kind             | Meaning                                                        |
+|-----------------------------------------------------|------------------|----------------------------------------------------------------|
+| `name: ClassVar[str]`                               | attribute        | Registry key and `--engine` value                              |
+| `sample_rate: int`                                  | attribute        | Output sample rate of every clip                               |
+| `max_batch: int = 1`                                | attribute        | Texts per `synthesize()` call                                  |
+| `max_concurrency: int = 1`                          | attribute        | Parallel `synthesize()` calls; `> 1` fans out over a thread pool |
+| `synthesize(texts: Sequence[str]) -> list[AudioClip]` | abstract method | One clip per input text, same order                            |
+| `fingerprint() -> str`                              | abstract method  | Digest of engine + model + voice + params; clip cache partition |
+| `close() -> None`                                   | method           | Release resources; `__exit__` calls it                         |
 
-Adding an engine: create `tts/<name>.py` with a frozen config dataclass and a
-`TTSEngine` subclass; add an `AppConfig` field plus a `_build_engine_config`
-call in `config.py` (it derives accepted keys from the dataclass fields and
-rejects unknown/missing ones); add a factory to `_ENGINES` in
-`tts/registry.py`. There is no plugin/entry-point mechanism.
+| Engine       | Config table          | `max_batch`   | `max_concurrency` |
+|--------------|-----------------------|---------------|-------------------|
+| `silence`    | none                  | 1             | 1                 |
+| `tone`       | none                  | 1             | 1                 |
+| `breeze`     | required              | `batch_size`  | 1                 |
+| `openai`     | required              | 1             | 4                 |
+| `elevenlabs` | required              | 1             | 2                 |
+| `deepgram`   | optional (all defaults) | 1           | 4                 |
 
-- API engines (`openai_compat`, `elevenlabs`, `deepgram`) share `tts/http.py`:
-  retry with backoff on transport errors and 408/429/5xx, honour `Retry-After`,
-  raise `TTSError` after exhausting retries. `api_key_env` names an env var —
-  keys never live in config files; the registry factory reads the variable
-  and passes the key in.
-- Breeze-specific guards (runaway reseed/cut, 409 busy-wait, reference voice)
-  live inside `BreezeEngine`, not the ABC. See `tts/guard.py` for the pure,
-  testable budget math. `tts/sidecar.py` spawns the configured `command`
-  (plus `--host/--port`) or adopts a server already answering `/health` on
-  the port; adopted servers are never killed on `close()`. Breeze keeps its
-  server log and `breeze/reference_voice.{wav,txt}` under the cache dir; the
-  reference wav's hash is part of the fingerprint.
+API engines (`openai_compat`, `elevenlabs`, `deepgram`) share `tts/http.py`: retry with backoff on transport errors and 408/429/5xx, honour `Retry-After`, raise `TTSError` after exhausting retries.
 
-## Resume
+Breeze keeps `breeze-server-<port>.log` and `breeze/reference_voice.{wav,txt}` under `cache_dir`. The reference wav's hash is part of the fingerprint.
 
-Content-addressed flat files, `os.replace` for atomic writes, no database:
+## Adding an engine
+
+1. Create `tts/<name>.py` with a frozen `<Name>Config` dataclass and a `TTSEngine` subclass.
+2. Add an `AppConfig` field in `config.py` and a `_build_engine_config` call in `load_config` (accepted keys are derived from the dataclass fields; pass `required=`).
+3. Add a factory to `_ENGINES` in `tts/registry.py`. Read the API key there via `_api_key`.
+4. Add tests using `httpx.MockTransport`.
+
+## Cache layout
 
 ```
-<cache_dir>/clips/<engine_fingerprint[:16]>/<sha256(text_pipeline_version, text)[:32]>.flac
-<out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.flac (+ .json manifest: fingerprint, sample rate, clip keys, gaps, offsets, duration)
+<cache_dir>/clips/<engine_fingerprint[:16]>/<sha256(TEXT_PIPELINE_VERSION, text)[:32]>.flac
+<out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.flac
+<out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.json
 ```
 
-`cache_dir` is `~/.cache/epub-to-m4b`, overridable with `E2M_CACHE_DIR`
-(tests set it to a tmp dir). Clips are shared across books; the chapter
-work dir is per book and per `out_dir`.
-
-Changing engine/voice/model starts a fresh cache directory; the old one stays
-usable if you switch back. Changing the gap policy alone never re-synthesizes
-— gaps are added at assembly time, not baked into cached clips — but it does
-re-assemble chapters, since the manifest records gaps. `TEXT_PIPELINE_VERSION`
-hashes the text pipeline's own source files, so editing `text/normalize.py`,
-`text/split.py`, or `text/lang/*` invalidates every cached clip without a
-manual bump. A zero-length or unreadable cache file is deleted and treated as
-a miss. The final `.m4b` is only re-encoded when a chapter flac is newer than
-it or ffprobe cannot read it with the expected chapter count.
+- `cache_dir` defaults to `~/.cache/epub-to-m4b`; `E2M_CACHE_DIR` overrides it. Tests must set it to a tmp dir.
+- Clips are shared across books. The chapter work dir is per book and per `out_dir`.
+- The clip key excludes engine fingerprint (directory partition) and gap policy (applied at assembly).
+- The chapter manifest records engine fingerprint, sample rate, clip keys, gaps, offsets, duration. Any mismatch re-assembles the chapter.
+- `TEXT_PIPELINE_VERSION` hashes the docstring-stripped AST of `text/normalize.py`, `text/split.py`, `text/lang/*`. Code changes there invalidate every clip; comment/docstring/format edits do not.
+- Zero-length or unreadable cache files are deleted and treated as misses.
+- The `.m4b` is re-encoded when any chapter FLAC is newer than it or ffprobe cannot read it with the expected chapter count.
 
 ## Tooling
 
-Python 3.14 (`requires-python`, `.python-version`, ruff `py314`, mypy 3.14).
+Python 3.14 (`requires-python`, `.python-version`, ruff `py314`, mypy `python_version`).
 
 ```bash
 make check      # ruff check + ruff format --check + mypy --strict + pytest
 make format     # ruff format + ruff check --fix
 ```
 
-`pyproject.toml` registers `gpu` (needs a running Breeze sidecar and CUDA)
-and `network` (hits a paid API) pytest markers and excludes both by default
-via `addopts`; run them with `uv run pytest -m gpu` / `-m network`. No test
-currently carries either marker — the suite runs entirely on `silence`/`tone`
-and `httpx.MockTransport`.
+| pytest marker | Meaning                                  | Run with                   |
+|---------------|------------------------------------------|----------------------------|
+| `gpu`         | Needs a running Breeze sidecar and CUDA  | `uv run pytest -m gpu`     |
+| `network`     | Hits a paid API                          | `uv run pytest -m network` |
+
+Both markers are excluded by default via `addopts`. No test currently carries either; the suite runs on `silence`/`tone` and `httpx.MockTransport`.
 
 ## Reference material
 
-The full design rationale and chapter-detection algorithm live in
-`epub-to-m4b.md` in the repo root — **not tracked in git**, kept for local
-reference only. If you need the "why" behind a decision that isn't captured
-above, check there first.
+`epub-to-m4b.md` in the repo root is untracked local reference. Never stage it.

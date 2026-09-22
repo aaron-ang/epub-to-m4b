@@ -17,6 +17,9 @@ from epub_to_m4b.errors import EpubToM4bError
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
+# Mono speech at the standard audiobook bitrate. Higher settings add file
+# size without an audible gain for TTS output.
+AAC_BITRATE = "64k"
 
 
 class FFmpegNotFoundError(EpubToM4bError):
@@ -83,7 +86,7 @@ def encode_m4b_command(audio_path: Path, metadata_path: Path, output_path: Path)
         "-c:a",
         "aac",
         "-b:a",
-        "64k",
+        AAC_BITRATE,
         "-f",
         "mp4",
         str(output_path),

@@ -22,6 +22,12 @@ _BOUNDARY_CHARS = ".!?;:"
 # e.g. the `"` in `He said "stop."` - the boundary is after it, not before.
 _CLOSERS = "\"')]\u201d\u2019"
 
+# Longest clip the splitter hands to an engine. Long enough to keep a full
+# clause's prosody in one clip; short enough that the Breeze runaway guard
+# (tts/guard.py scales its limits per character) stays tight and every
+# provider's per-request cap is far away.
+DEFAULT_MAX_CHARS = 125
+
 
 def _protected_periods(text: str) -> set[int]:
     """Indices of '.' characters that belong to a known abbreviation."""
@@ -125,7 +131,7 @@ def _merge_short(pieces: list[str], max_chars: int) -> list[str]:
     return merged
 
 
-def split_paragraph(paragraph: Paragraph, *, max_chars: int = 125) -> list[str]:
+def split_paragraph(paragraph: Paragraph, *, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
     text = paragraph.text.strip()
     if not text:
         return []

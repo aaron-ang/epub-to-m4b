@@ -19,6 +19,12 @@ from epub_to_m4b.tts.base import TTSEngine
 # enough that downstream VTT cues have a meaningful, non-zero duration.
 _CHARS_PER_SECOND = 15.0
 _MIN_SECONDS = 0.2
+# 24 kHz matches the API engines so mixed-engine tests share one rate.
+_SAMPLE_RATE = 24000
+# A440 reference pitch.
+_TONE_FREQUENCY_HZ = 440.0
+# Leaves headroom below full scale.
+_TONE_AMPLITUDE = 0.2
 
 
 def _duration_seconds(text: str) -> float:
@@ -28,7 +34,7 @@ def _duration_seconds(text: str) -> float:
 @dataclass
 class SilenceEngine(TTSEngine):
     name: ClassVar[str] = "silence"
-    sample_rate: int = 24000
+    sample_rate: int = _SAMPLE_RATE
 
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
         clips = []
@@ -45,9 +51,9 @@ class SilenceEngine(TTSEngine):
 @dataclass
 class ToneEngine(TTSEngine):
     name: ClassVar[str] = "tone"
-    sample_rate: int = 24000
-    frequency: float = 440.0
-    amplitude: float = 0.2
+    sample_rate: int = _SAMPLE_RATE
+    frequency: float = _TONE_FREQUENCY_HZ
+    amplitude: float = _TONE_AMPLITUDE
 
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
         clips = []

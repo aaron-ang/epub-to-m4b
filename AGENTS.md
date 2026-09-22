@@ -142,6 +142,35 @@ make ci         # alias of make check
 
 Both markers are excluded by default via `addopts`. No test currently carries either; the suite runs on `silence`/`tone` and `httpx.MockTransport`.
 
+## Tunables
+
+Every threshold or default lives as a named module constant next to a comment explaining the mechanism. Change the constant, not a literal at the call site.
+
+| Constant | Module | Meaning |
+|----------|--------|---------|
+| `DEFAULT_MAX_CHARS` | `text/split.py` | Longest clip text handed to an engine |
+| `DEFAULT_TOC_DEPTH` | `epub/chapters.py` | TOC nesting level that starts a chapter |
+| `DEFAULT_MIN_CHARS` | `epub/chapters.py` | Body chars below which a chapter is a stub and merges |
+| `MIN_TOC_COVERAGE` | `epub/chapters.py` | Fraction of text docs the TOC must cover before it is trusted over headings |
+| `MAX_TITLE_BYTES` | `epub/chapters.py` | Longest heading text accepted as a chapter title |
+| `RUNNING_HEADER_MIN_DOCS` | `epub/chapters.py` | Docs a repeated first line must appear in to count as a running header |
+| `MIN_HEADING_KEY_CHARS` | `epub/chapters.py` | Shortest normalised heading key that can match a TOC label |
+| `AAC_BITRATE` | `audio/ffmpeg.py` | AAC bitrate for the `.m4b` |
+| `_MIN_CHAPTER_SECONDS` | `audio/assemble.py` | Floor on assembled chapter length |
+| `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause cut / paragraph / heading |
+| `RetryPolicy` defaults | `tts/http.py` | Retry count, doubling backoff, Retry-After cap |
+| `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size |
+| `_REFERENCE_TIMEOUT_SECONDS`, `_BATCH_TIMEOUT_SECONDS` | `tts/breeze.py` | HTTP timeouts for reference-voice and batch POSTs |
+| `_BUSY_STATUS`, `_BUSY_RETRIES`, `_BUSY_WAIT_SECONDS` | `tts/breeze.py` | 409 busy handling: status, attempts, wait between attempts |
+| `CLIP_BASE_SECONDS`, `CLIP_SECONDS_PER_CHAR` | `tts/guard.py` | Duration budget that triggers a reseed retry |
+| `CUT_SECONDS_PER_CHAR` | `tts/guard.py` | Duration budget beyond which a clip is truncated |
+| `TOKENS_PER_SECOND` | `tts/guard.py` | Codec audio tokens per second, for the server-side token cap |
+| `TOKEN_CAP_SLACK` | `tts/guard.py` | Multiplier loosening the server-side token cap |
+| `FADE_SECONDS` | `tts/guard.py` | Fade-out applied to a truncated clip |
+| `RUNAWAY_RETRIES` | `tts/guard.py` | Reseed attempts before cutting |
+| `_HEALTH_TIMEOUT_SECONDS`, `_POLL_INTERVAL_SECONDS` | `tts/sidecar.py` | `/health` request timeout and poll spacing |
+| `_STARTUP_TIMEOUT_SECONDS`, `_TERMINATE_TIMEOUT_SECONDS` | `tts/sidecar.py` | Wait for server ready; wait for graceful exit before kill |
+
 ## Reference material
 
 `epub-to-m4b.md` in the repo root is untracked local reference. Never stage it.

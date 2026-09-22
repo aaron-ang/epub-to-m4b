@@ -19,6 +19,9 @@ from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest
 from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, post_with_retry
 
+# Rate of the raw PCM the API returns for ``response_format=pcm``.
+_SAMPLE_RATE = 24000
+
 
 @dataclass(frozen=True)
 class OpenAIConfig:
@@ -38,7 +41,7 @@ class OpenAIEngine(TTSEngine):
     transport: httpx.BaseTransport | None = None
     sleep: Callable[[float], None] = time.sleep
 
-    sample_rate: int = field(default=24000, init=False)
+    sample_rate: int = field(default=_SAMPLE_RATE, init=False)
     max_concurrency: int = field(default=4, init=False)
     _client: httpx.Client = field(init=False, repr=False)
 

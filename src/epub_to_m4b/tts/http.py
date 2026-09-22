@@ -39,8 +39,12 @@ class TTSError(EpubToM4bError):
 
 @dataclass(frozen=True)
 class RetryPolicy:
+    # Retries and their doubling waits together ride out a transient outage
+    # of about half a minute without hammering the provider.
     max_retries: int = 5
     backoff_seconds: tuple[float, ...] = (1, 2, 4, 8, 16)
+    # Cap on an honoured Retry-After header so a huge value from the
+    # provider does not stall the run indefinitely.
     max_retry_after_seconds: float = 60.0
 
 

@@ -70,6 +70,12 @@ EXCLUDED_LABELS = frozenset(
 MIN_TOC_COVERAGE = 0.30
 MAX_TITLE_BYTES = 140
 RUNNING_HEADER_MIN_DOCS = 3
+# Depth 1 = only top-level TOC entries start chapters; nested entries stay
+# inside their parent.
+DEFAULT_TOC_DEPTH = 1
+# About a couple of sentences of body text. Anything shorter is a stub such
+# as a part-title page, not a chapter, and merges into its neighbour.
+DEFAULT_MIN_CHARS = 200
 
 _BARE_NUMBER_RE = re.compile(r"^(?:\d{1,3}|[ivxlcdm]{1,7})\s*[.:)]?$", re.IGNORECASE)
 # Labels calibre generates from truncated paragraph text; they mark sections, not chapters.
@@ -138,8 +144,8 @@ def build_chapters(
     toc: Sequence[TocEntry],
     book_title: str,
     *,
-    toc_depth: int = 1,
-    min_chars: int = 200,
+    toc_depth: int = DEFAULT_TOC_DEPTH,
+    min_chars: int = DEFAULT_MIN_CHARS,
 ) -> list[Chapter]:
     docs = remove_running_headers([d for d in spine if not is_excluded_doc(d)], book_title)
     entries = [e for e in toc if e.depth <= toc_depth]

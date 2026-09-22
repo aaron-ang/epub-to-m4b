@@ -9,13 +9,21 @@ from typing import Any
 from ebooklib import ITEM_COVER, ITEM_DOCUMENT, ITEM_IMAGE, epub
 
 from epub_to_m4b.book import Book
-from epub_to_m4b.epub.chapters import SpineDoc, build_chapters, flatten_toc
+from epub_to_m4b.epub.chapters import (
+    DEFAULT_MIN_CHARS,
+    DEFAULT_TOC_DEPTH,
+    SpineDoc,
+    build_chapters,
+    flatten_toc,
+)
 from epub_to_m4b.epub.html import parse_document
 
 __all__ = ["SpineDoc", "read_book", "read_spine"]
 
 
-def read_book(path: Path, *, toc_depth: int = 1, min_chars: int = 200) -> Book:
+def read_book(
+    path: Path, *, toc_depth: int = DEFAULT_TOC_DEPTH, min_chars: int = DEFAULT_MIN_CHARS
+) -> Book:
     ebook = _open(path)
     title = _title(ebook, path)
     spine = _spine_docs(ebook)

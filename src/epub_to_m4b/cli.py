@@ -23,6 +23,7 @@ from epub_to_m4b.audio.metadata import build_ffmetadata, embed_cover
 from epub_to_m4b.audio.vtt import write_vtt
 from epub_to_m4b.book import Book, Paragraph, ParagraphKind
 from epub_to_m4b.config import load_config, resolve_cache_dir
+from epub_to_m4b.epub.chapters import DEFAULT_MIN_CHARS, DEFAULT_TOC_DEPTH
 from epub_to_m4b.epub.reader import read_book
 from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth.cache import atomic_replace
@@ -99,13 +100,13 @@ def _add_book_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--toc-depth",
         type=int,
-        default=1,
+        default=DEFAULT_TOC_DEPTH,
         help="TOC nesting level that starts a new chapter (default: %(default)s)",
     )
     parser.add_argument(
         "--min-chars",
         type=int,
-        default=200,
+        default=DEFAULT_MIN_CHARS,
         help="chapters with less body text than this merge into a neighbour (default: %(default)s)",
     )
 
@@ -144,13 +145,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     return result
 
 
+# Width of the title column in `chapters` output; longer titles are truncated
+# with an ellipsis so the numeric columns stay aligned.
+_TITLE_COLUMN_WIDTH = 50
+
+
 def _cmd_chapters(book: Book, _args: argparse.Namespace) -> int:
     print(f"{book.title} — {book.author or 'unknown author'} ({len(book.chapters)} chapters)")
-    print(f"{'#':>3}  {'title':<50}  {'paras':>5}  {'chars':>7}  {'docs':>4}")
+    print(f"{'#':>3}  {'title':<{_TITLE_COLUMN_WIDTH}}  {'paras':>5}  {'chars':>7}  {'docs':>4}")
     for n, ch in enumerate(book.chapters, start=1):
         chars = sum(len(p.text) for p in ch.paragraphs)
-        title = ch.title if len(ch.title) <= 50 else ch.title[:49] + "…"
-        print(f"{n:>3}  {title:<50}  {len(ch.paragraphs):>5}  {chars:>7}  {len(ch.source_ids):>4}")
+        title = (
+            ch.title
+            if len(ch.title) <= _TITLE_COLUMN_WIDTH
+            else ch.title[: _TITLE_COLUMN_WIDTH - 1] + "…"
+        )
+        print(
+            f"{n:>3}  {title:<{_TITLE_COLUMN_WIDTH}}  {len(ch.paragraphs):>5}"
+            f"  {chars:>7}  {len(ch.source_ids):>4}"
+        )
     return 0
 
 

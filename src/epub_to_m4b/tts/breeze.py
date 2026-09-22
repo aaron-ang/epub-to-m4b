@@ -50,10 +50,16 @@ class BreezeConfig:
     weights_dir: Path
     command: Sequence[str]
     cache_dir: Path
+    # Any free unprivileged port; must match a server you want adopted.
     port: int = 7861
     instruction: str = _DEFAULT_INSTRUCTION
+    # Classifier-free-guidance strength the model card recommends; higher
+    # follows the instruction harder at the cost of naturalness.
     cfg_scale: float = 4.0
+    # Fixed so re-synthesis is reproducible and cache keys stay valid.
     seed: int = 42
+    # Texts per POST. Bounded by server VRAM; larger batches stop helping
+    # once the GPU is saturated.
     batch_size: int = 64
 
 

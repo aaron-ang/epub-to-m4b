@@ -46,9 +46,22 @@ _CLAUSE_CHARS = ",;:"
 
 @dataclass(frozen=True, slots=True)
 class GapPolicy:
+    """Seconds of silence inserted after a sentence at assembly time.
+
+    Gaps are applied when a chapter is stitched, so they are not part of
+    the clip cache key; changing them re-assembles chapters without
+    re-synthesising any audio.
+    """
+
+    # Breath between sentences ending in . ! ?
     sentence_end: float = 0.25
+    # Shorter pause after , ; : - the clip was force-cut mid-sentence by the
+    # splitter, so the next clip continues the same sentence.
     clause: float = 0.10
+    # Longer pause after the last sentence of a paragraph (unless it also
+    # closes the chapter, where the chapter boundary provides the break).
     paragraph: float = 0.40
+    # Pause after a chapter or section title.
     heading: float = 0.80
 
 

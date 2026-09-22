@@ -130,7 +130,7 @@ def start_or_adopt(
 
     with httpx.Client(**client_kwargs) as client:  # type: ignore[arg-type]
         initial = _poll_health(client, base_url)
-        if initial is not None and initial.status_code == 200:
+        if initial is not None and initial.status_code == httpx.codes.OK:
             return SidecarHandle(
                 base_url=base_url,
                 sample_rate=int(initial.json()["sample_rate"]),
@@ -153,7 +153,7 @@ def start_or_adopt(
             deadline = time.monotonic() + startup_timeout
             while time.monotonic() < deadline:
                 response = _poll_health(client, base_url)
-                if response is not None and response.status_code == 200:
+                if response is not None and response.status_code == httpx.codes.OK:
                     return SidecarHandle(
                         base_url=base_url,
                         sample_rate=int(response.json()["sample_rate"]),

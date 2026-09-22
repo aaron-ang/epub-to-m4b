@@ -28,6 +28,7 @@ import numpy as np
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.base import TTSEngine, pcm16_to_float32
+from epub_to_m4b.tts.http import TTSError
 from epub_to_m4b.tts.sidecar import SidecarHandle, start_or_adopt
 
 logger = logging.getLogger(__name__)
@@ -193,16 +194,16 @@ class BreezeEngine(TTSEngine):
     def _split_segments(self, response: httpx.Response, *, expected_count: int) -> list[AudioClip]:
         header = response.headers.get("X-Segment-Bytes", "")
         if not header:
-            raise RuntimeError("Breeze batch response is missing the X-Segment-Bytes header")
+            raise TTSError("Breeze batch response is missing the X-Segment-Bytes header")
         sizes = [int(value) for value in header.split(",")]
         if len(sizes) != expected_count:
-            raise RuntimeError(
+            raise TTSError(
                 f"Breeze batch response returned {len(sizes)} segments for {expected_count} texts"
             )
         sample_rate = int(response.headers.get("X-Sample-Rate", self.sample_rate))
         body = response.content
         if sum(sizes) != len(body):
-            raise RuntimeError(
+            raise TTSError(
                 f"Breeze batch response segment sizes sum to {sum(sizes)} "
                 f"but body is {len(body)} bytes"
             )

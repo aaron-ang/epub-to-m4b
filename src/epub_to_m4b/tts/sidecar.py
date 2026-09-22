@@ -26,6 +26,13 @@ from typing import Self
 
 import httpx
 
+from epub_to_m4b.errors import EpubToM4bError
+
+
+class SidecarError(EpubToM4bError):
+    """The local TTS server could not be started or never reported healthy."""
+
+
 _HEALTH_TIMEOUT_SECONDS = 2.0
 _POLL_INTERVAL_SECONDS = 2.0
 _STARTUP_TIMEOUT_SECONDS = 180.0
@@ -158,7 +165,7 @@ def start_or_adopt(
                 # both mean "keep waiting" here - only a 200 ends the wait.
                 time.sleep(poll_interval)
 
-            raise TimeoutError(
+            raise SidecarError(
                 f"server on port {port} did not become healthy within "
                 f"{startup_timeout:.0f}s; see log at {log_path}"
             )

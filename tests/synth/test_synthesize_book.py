@@ -13,7 +13,7 @@ import pytest
 
 from epub_to_m4b.book import AudioClip, Book, Chapter, Paragraph, ParagraphKind
 from epub_to_m4b.synth import cache
-from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
+from epub_to_m4b.synth.orchestrator import GapPolicy, SynthesisError, synthesize_book
 from epub_to_m4b.tts.base import TTSEngine
 from tests.helpers import make_book
 
@@ -238,7 +238,7 @@ def test_clip_vanishing_between_synthesis_and_assembly_is_a_clear_error(
     # is ever in memory); if one is gone by then, fail loudly rather than
     # assemble a chapter with a hole in it.
     monkeypatch.setattr(cache, "load_clip", lambda *_args: None)
-    with pytest.raises(RuntimeError, match="vanished"):
+    with pytest.raises(SynthesisError, match="vanished"):
         synthesize_book(
             _book(n_chapters=1),
             _RecordingEngine(),

@@ -24,12 +24,19 @@ from pathlib import Path
 
 from epub_to_m4b.audio.assemble import assemble_chapter
 from epub_to_m4b.book import AudioClip, Book, Chapter, Paragraph, ParagraphKind, Sentence
+from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.batching import PendingClip, make_batches
 from epub_to_m4b.text import TEXT_PIPELINE_VERSION
 from epub_to_m4b.text.normalize import normalize
 from epub_to_m4b.text.split import split_paragraph
 from epub_to_m4b.tts.base import TTSEngine
+
+
+class SynthesisError(EpubToM4bError):
+    """The cache lost a clip between synthesis and chapter assembly; a rerun
+    synthesizes it again."""
+
 
 # A closing quote/bracket trailing the real terminator, e.g. the `"` in
 # `He said "stop."` - look past it to find what actually ended the sentence.
@@ -294,7 +301,7 @@ def _assemble_chapter(
     for sentence, key in zip(plan.sentences, plan.keys, strict=True):
         clip = cache.load_clip(cache_dir, engine_fingerprint, key)
         if clip is None:
-            raise RuntimeError(
+            raise SynthesisError(
                 f"clip {key} for chapter {idx} vanished from {cache_dir} between synthesis "
                 "and assembly - rerun to synthesize it again"
             )

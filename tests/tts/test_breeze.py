@@ -11,6 +11,7 @@ import pytest
 
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.breeze import BreezeConfig, BreezeEngine
+from epub_to_m4b.tts.http import TTSError
 
 _SAMPLE_RATE = 24000
 
@@ -271,7 +272,7 @@ def test_segment_count_mismatch_raises_clear_error(tmp_path: Path) -> None:
     config = _config(tmp_path)
     engine = BreezeEngine(config, transport=transport)
 
-    with pytest.raises(RuntimeError, match="2 segments"):
+    with pytest.raises(TTSError, match="2 segments"):
         engine.synthesize(["a", "b", "c"])
     engine.close()
 

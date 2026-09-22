@@ -177,7 +177,7 @@ def test_timeout_raises_with_log_path_in_message(
     transport = _spawn_then_transport([_loading()])
     log_path = tmp_path / "server.log"
 
-    with pytest.raises(TimeoutError) as exc_info:
+    with pytest.raises(sidecar.SidecarError) as exc_info:
         sidecar.start_or_adopt(
             ["fake-command"],
             7861,
@@ -201,7 +201,7 @@ def test_timeout_keeps_spawned_process_terminated_not_adopted(
     monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
 
     transport = _spawn_then_transport([_loading()])
-    with pytest.raises(TimeoutError):
+    with pytest.raises(sidecar.SidecarError):
         sidecar.start_or_adopt(
             ["fake-command"],
             7861,
@@ -224,7 +224,7 @@ def test_timeout_on_adopted_never_healthy_server_terminates_nothing(
     monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
 
     transport = _health_transport([_loading()])
-    with pytest.raises(TimeoutError):
+    with pytest.raises(sidecar.SidecarError):
         sidecar.start_or_adopt(
             ["fake-command"],
             7861,

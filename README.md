@@ -194,7 +194,7 @@ model = "aura-2-thalia-en"
 | `error: required on PATH but not found: ffmpeg, ffprobe`                                     | Install ffmpeg; both `ffmpeg` and `ffprobe` must be on `PATH`                                                                |
 | `error: engine 'breeze' selected but no [engine.breeze] table was found - ...`               | Add the `[engine.breeze]` table to the config file, or pass `--config PATH` to a file that has it                            |
 | `error: environment variable OPENAI_API_KEY is not set (needed for engine 'openai')`         | `export` the variable named by that engine's `api_key_env`                                                                   |
-| `TimeoutError: server on port 7861 did not become healthy within 180s; see log at ...`        | Read `<cache_dir>/breeze-server-<port>.log`; check `command`, `weights_dir`, and whether another process holds `port`         |
+| `error: server on port 7861 did not become healthy within 180s; see log at ...`               | Read `<cache_dir>/breeze-server-<port>.log`; check `command`, `weights_dir`, and whether another process holds `port`         |
 | `Breeze server busy, waiting for the running inference to finish` (stderr, once per batch)    | Another client holds the server's single inference slot; the run waits (up to 60 retries, 5 s apart) and continues on its own |
 | Resume re-synthesizes every sentence                                                         | Engine settings changed (new fingerprint) or code in `text/normalize.py`, `text/split.py`, `text/lang/*` changed (new `TEXT_PIPELINE_VERSION`) |
 

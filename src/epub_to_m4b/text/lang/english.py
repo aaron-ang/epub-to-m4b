@@ -33,20 +33,17 @@ _DECADE_RE = re.compile(r"\b(\d{2})(\d)0s\b")
 
 
 def _decade_repl(match: re.Match[str]) -> str:
-    try:
-        first_two = int(match.group(1))
-        tens = int(match.group(2))
-        if first_two == 20 and tens == 0:
-            return "two thousands"
-        head = num2words(first_two)
-        if tens == 0:
-            return f"{head} hundreds"
-        if tens == 1:
-            return f"{head} tens"
-        tail = num2words(tens * 10)
-        return f"{head} {tail[:-1]}ies"
-    except Exception:
-        return match.group(0)
+    first_two = int(match.group(1))
+    tens = int(match.group(2))
+    if first_two == 20 and tens == 0:
+        return "two thousands"
+    head = num2words(first_two)
+    if tens == 0:
+        return f"{head} hundreds"
+    if tens == 1:
+        return f"{head} tens"
+    tail = num2words(tens * 10)
+    return f"{head} {tail[:-1]}ies"
 
 
 def decades_to_words(text: str) -> str:
@@ -110,10 +107,7 @@ def years_to_words(text: str) -> str:
     def repl(match: re.Match[str]) -> str:
         if not _year_context_ok(text, match.start(), match.end()):
             return match.group(0)
-        try:
-            return _year_word(int(match.group(0)))
-        except Exception:
-            return match.group(0)
+        return _year_word(int(match.group(0)))
 
     return _YEAR_RE.sub(repl, text)
 
@@ -174,19 +168,13 @@ def roman_numerals_to_words(text: str) -> str:
         word, roman = match.group(1), match.group(2)
         if not _ROMAN_VALID_RE.fullmatch(roman):
             return match.group(0)
-        try:
-            return f"{word} {num2words(_roman_to_int(roman))}"
-        except Exception:
-            return match.group(0)
+        return f"{word} {num2words(_roman_to_int(roman))}"
 
     def repl_standalone(match: re.Match[str]) -> str:
         roman = match.group(1)
         if not _ROMAN_VALID_RE.fullmatch(roman):
             return match.group(0)
-        try:
-            return str(num2words(_roman_to_int(roman)))
-        except Exception:
-            return match.group(0)
+        return str(num2words(_roman_to_int(roman)))
 
     text = _ROMAN_AFTER_CHAPTER_RE.sub(repl_chapter, text)
     return _ROMAN_STANDALONE_RE.sub(repl_standalone, text)
@@ -206,25 +194,22 @@ _CLOCK_RE = re.compile(r"\b(\d{1,2}):([0-5]\d)(?::([0-5]\d))?\b")
 
 
 def _clock_repl(match: re.Match[str]) -> str:
-    try:
-        hour = int(match.group(1))
-        minute = int(match.group(2))
-        second_group = match.group(3)
-        second = int(second_group) if second_group is not None else None
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            return match.group(0)
-        hour_word = num2words(hour)
-        if minute == 0:
-            phrase = f"{hour_word} hundred"
-        elif minute < 10:
-            phrase = f"{hour_word} oh {num2words(minute)}"
-        else:
-            phrase = f"{hour_word} {num2words(minute)}"
-        if second is not None and second > 0:
-            phrase = f"{phrase} and {num2words(second)} seconds"
-        return phrase
-    except Exception:
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    second_group = match.group(3)
+    second = int(second_group) if second_group is not None else None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return match.group(0)
+    hour_word = num2words(hour)
+    if minute == 0:
+        phrase = f"{hour_word} hundred"
+    elif minute < 10:
+        phrase = f"{hour_word} oh {num2words(minute)}"
+    else:
+        phrase = f"{hour_word} {num2words(minute)}"
+    if second is not None and second > 0:
+        phrase = f"{phrase} and {num2words(second)} seconds"
+    return phrase
 
 
 def clock_to_words(text: str) -> str:
@@ -266,7 +251,9 @@ def _ordinal_repl(match: re.Match[str]) -> str:
         return match.group(0)
     try:
         return str(num2words(n, to="ordinal"))
-    except Exception:
+    except OverflowError:
+        # num2words has no name for magnitudes past its largest scale word;
+        # a digit run that long is not prose, leave it verbatim.
         return match.group(0)
 
 
@@ -305,7 +292,7 @@ def _cardinal(digits: str) -> str:
 def _range_repl(match: re.Match[str]) -> str:
     try:
         return f"{_cardinal(match.group(1))} to {_cardinal(match.group(2))}"
-    except Exception:
+    except OverflowError:
         return match.group(0)
 
 
@@ -329,7 +316,8 @@ def numbers_to_words(text: str) -> str:
             return match.group(0)
         try:
             return _cardinal(match.group(0))
-        except Exception:
+        except OverflowError:
+            # Also covers a decimal so long that float() rounds it to inf.
             return match.group(0)
 
     return _NUMBER_RE.sub(repl, text)

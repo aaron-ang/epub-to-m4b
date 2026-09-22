@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-import epub_to_m4b.text.lang.english as english_mod
 from epub_to_m4b.text.lang.english import (
     clock_to_words,
     decades_to_words,
     normalize_english,
+    numbers_to_words,
     ordinals_and_math_to_words,
     roman_numerals_to_words,
     years_to_words,
@@ -48,14 +48,6 @@ def test_years_to_words_skips_without_a_cue() -> None:
 
 def test_years_to_words_skips_dollar_amount() -> None:
     assert years_to_words("$2000 grant") == "$2000 grant"
-
-
-def test_years_to_words_returns_input_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(*_args: object, **_kwargs: object) -> str:
-        raise RuntimeError("forced")
-
-    monkeypatch.setattr(english_mod, "num2words", _boom)
-    assert years_to_words("in 1900") == "in 1900"
 
 
 # Documented choice: "page 1066" has no year cue, so years_to_words leaves it
@@ -238,3 +230,40 @@ def test_small_numbers_stay_as_digits_even_with_a_date_nearby() -> None:
     # "5" is under 1000 so it's left as a digit; "1997" sits next to the
     # month name "August" so the year heuristic converts it.
     assert normalize_english("August 5, 1997") == "August 5, nineteen ninety-seven"
+
+
+# ---------------------------------------------------------------------------
+# num2words overflow: digit runs past its largest scale word stay verbatim
+# ---------------------------------------------------------------------------
+
+# Longer than any integer num2words can name, so every call site whose digit
+# run is unbounded by its regex must fall back to the original text.
+_TOO_MANY_DIGITS = "9" * 310
+
+
+def test_ordinal_past_num2words_range_is_left_verbatim() -> None:
+    text = f"the {_TOO_MANY_DIGITS}th time"
+    assert ordinals_and_math_to_words(text) == text
+
+
+def test_range_past_num2words_range_is_left_verbatim() -> None:
+    grouped = "1" + ",000" * 102
+    text = f"pages {grouped}-{grouped}"
+    assert numbers_to_words(text) == text
+
+
+@pytest.mark.parametrize("digits", [_TOO_MANY_DIGITS, f"{_TOO_MANY_DIGITS}.5"])
+def test_cardinal_past_num2words_range_is_left_verbatim(digits: str) -> None:
+    text = f"count {digits} now"
+    assert numbers_to_words(text) == text
+
+
+def test_unexpected_num2words_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only OverflowError is a known, benign num2words outcome; anything else
+    # is a bug that must surface rather than silently leave digits unread.
+    def _boom(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("forced")
+
+    monkeypatch.setattr("epub_to_m4b.text.lang.english.num2words", _boom)
+    with pytest.raises(RuntimeError, match="forced"):
+        numbers_to_words("count 12345 now")

@@ -7,6 +7,12 @@ Turn an EPUB into an M4B audiobook with chapter markers, cover art, and a WebVTT
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/aaron-ang/epub-to-m4b/blob/main/LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://github.com/aaron-ang/epub-to-m4b/blob/main/pyproject.toml)
 
+## Sample
+
+*Crime and Punishment*, Part 1, Chapter 1, narrated by the self-hosted `breeze` engine:
+
+https://github.com/user-attachments/assets/1cdd67f2-acef-4192-b6ba-218b0e352c3e
+
 ## Quick start
 
 Requires Python 3.14, [uv](https://docs.astral.sh/uv/), and `ffmpeg` + `ffprobe` on `PATH`.

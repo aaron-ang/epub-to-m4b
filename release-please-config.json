@@ -3,5 +3,15 @@
   "release-type": "python",
   "include-component-in-tag": false,
   "bump-minor-pre-major": true,
-  "packages": { ".": {} }
+  "packages": {
+    ".": {
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name=='epub-to-m4b')].version"
+        }
+      ]
+    }
+  }
 }

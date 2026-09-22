@@ -1,6 +1,6 @@
 [project]
 name = "epub-to-m4b"
-version = "0.2.0"
+version = "0.2.1"
 description = "Turn an EPUB into an M4B audiobook with a WebVTT transcript, using pluggable TTS engines."
 readme = "README.md"
 requires-python = ">=3.14"

@@ -24,3 +24,5 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: uv sync --frozen
       - run: make check
+      - run: uv build
+      - run: uvx --from "$(ls dist/*.whl)" epub-to-m4b --version

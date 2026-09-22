@@ -3,12 +3,20 @@
 Turn an EPUB into an M4B audiobook with chapter markers, cover art, and a WebVTT transcript.
 
 [![CI](https://github.com/aaron-ang/epub-to-m4b/actions/workflows/ci.yml/badge.svg)](https://github.com/aaron-ang/epub-to-m4b/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](pyproject.toml)
+[![PyPI](https://img.shields.io/pypi/v/epub-to-m4b.svg)](https://pypi.org/project/epub-to-m4b/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/aaron-ang/epub-to-m4b/blob/main/LICENSE)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://github.com/aaron-ang/epub-to-m4b/blob/main/pyproject.toml)
 
 ## Quick start
 
 Requires Python 3.14, [uv](https://docs.astral.sh/uv/), and `ffmpeg` + `ffprobe` on `PATH`.
+
+```bash
+uv tool install epub-to-m4b   # or: pipx install epub-to-m4b
+epub-to-m4b chapters book.epub
+```
+
+From source:
 
 ```bash
 git clone https://github.com/aaron-ang/epub-to-m4b && cd epub-to-m4b && uv sync
@@ -221,8 +229,8 @@ make check   # ruff check, ruff format --check, mypy --strict, pytest
 
 ## Contributing
 
-Workflow and checks: [CONTRIBUTING.md](CONTRIBUTING.md). Module layout and conventions: [AGENTS.md](AGENTS.md).
+Workflow and checks: [CONTRIBUTING.md](https://github.com/aaron-ang/epub-to-m4b/blob/main/CONTRIBUTING.md). Module layout and conventions: [AGENTS.md](https://github.com/aaron-ang/epub-to-m4b/blob/main/AGENTS.md).
 
 ## License
 
-[MIT](LICENSE).
+[MIT](https://github.com/aaron-ang/epub-to-m4b/blob/main/LICENSE).

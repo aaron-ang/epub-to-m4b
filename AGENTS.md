@@ -142,6 +142,12 @@ make ci         # alias of make check
 
 Both markers are excluded by default via `addopts`. No test currently carries either; the suite runs on `silence`/`tone` and `httpx.MockTransport`.
 
+| Workflow                                | Trigger                     | Does                                                                                   |
+|-----------------------------------------|-----------------------------|----------------------------------------------------------------------------------------|
+| `.github/workflows/ci.yml`              | push to `main`, PR          | `make check`, `uv build`, runs the built wheel with `--version`                        |
+| `.github/workflows/release-please.yml`  | push to `main`              | Opens/updates the release PR from Conventional Commits; merging tags `vX.Y.Z` and creates a GitHub Release; versions tracked in `.release-please-manifest.json`, config in `release-please-config.json` |
+| `.github/workflows/publish.yml`         | GitHub Release published    | `uv build`, upload to PyPI via Trusted Publishing (OIDC, environment `pypi`)          |
+
 ## Tunables
 
 Every threshold or default lives as a named module constant next to a comment explaining the mechanism. Change the constant, not a literal at the call site.

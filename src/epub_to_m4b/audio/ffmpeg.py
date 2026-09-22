@@ -13,12 +13,19 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
+from epub_to_m4b.errors import EpubToM4bError
+
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 
 
-class FFmpegNotFoundError(RuntimeError):
+class FFmpegNotFoundError(EpubToM4bError):
     """ffmpeg and/or ffprobe is not on PATH."""
+
+
+class FFmpegError(EpubToM4bError):
+    """An ffmpeg/ffprobe invocation could not run or exited non-zero; the
+    message carries the command name and the tool's stderr."""
 
 
 def require_ffmpeg() -> None:
@@ -99,10 +106,10 @@ def ffprobe_chapters_command(m4b_path: Path) -> list[str]:
 def run_command(args: Sequence[str]) -> str:
     exe = shutil.which(args[0])
     if exe is None:
-        raise FileNotFoundError(f"{args[0]!r} not found on PATH")
+        raise FFmpegError(f"{args[0]!r} not found on PATH")
     result = subprocess.run(args, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise RuntimeError(f"{args[0]} failed (exit {result.returncode}): {result.stderr.strip()}")
+        raise FFmpegError(f"{args[0]} failed (exit {result.returncode}): {result.stderr.strip()}")
     return result.stdout
 
 

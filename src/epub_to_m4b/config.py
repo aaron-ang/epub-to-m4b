@@ -28,6 +28,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, get_args, get_origin, get_type_hints
 
+from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.tts.breeze import BreezeConfig
 from epub_to_m4b.tts.deepgram import DeepgramConfig
 from epub_to_m4b.tts.elevenlabs import ElevenLabsConfig
@@ -51,7 +52,7 @@ _OPENAI_REQUIRED = ("base_url", "model", "voice")
 _ELEVENLABS_REQUIRED = ("voice_id",)
 
 
-class ConfigError(Exception):
+class ConfigError(EpubToM4bError):
     """A user-facing config problem: bad path, malformed TOML, missing keys."""
 
 

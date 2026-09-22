@@ -25,6 +25,7 @@ from epub_to_m4b.audio.vtt import write_vtt
 from epub_to_m4b.book import Book, Paragraph, ParagraphKind
 from epub_to_m4b.config import ConfigError, load_config, resolve_cache_dir
 from epub_to_m4b.epub.reader import read_book
+from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth.cache import atomic_replace
 from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
 from epub_to_m4b.text.normalize import normalize
@@ -213,7 +214,7 @@ def _m4b_is_current(
         return False
     try:
         probe = probe_chapters(m4b_path)
-    except RuntimeError, ValueError:
+    except EpubToM4bError, ValueError:
         return False
     return len(probe.get("chapters", [])) == expected_chapters
 

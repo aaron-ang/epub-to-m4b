@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from epub_to_m4b.audio.ffmpeg import (
+    FFmpegError,
     FFmpegNotFoundError,
     concat_command,
     concat_list,
@@ -98,13 +100,17 @@ def test_require_ffmpeg_raises_when_missing(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_run_command_raises_for_missing_executable() -> None:
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FFmpegError, match="not found on PATH"):
         run_command(["definitely-not-a-real-binary-xyz"])
 
 
-def test_run_command_raises_on_nonzero_exit() -> None:
-    with pytest.raises(RuntimeError, match="failed"):
-        run_command(["false"])
+def test_run_command_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="Invalid data found\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(FFmpegError, match=r"ffmpeg failed \(exit 1\): Invalid data found"):
+        run_command(["ffmpeg", "-i", "in.flac", "out.m4b"])
 
 
 def test_run_command_returns_stdout() -> None:

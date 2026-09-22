@@ -23,6 +23,7 @@ import httpx
 import numpy as np
 
 from epub_to_m4b.book import AudioClip
+from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.tts.base import pcm16_to_float32
 
 _RETRYABLE_STATUSES = frozenset({408, 429})
@@ -31,7 +32,7 @@ _BODY_EXCERPT_CHARS = 200
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 
 
-class TTSError(Exception):
+class TTSError(EpubToM4bError):
     """A TTS request failed for good: retries exhausted, a status the
     server will not recover from, or a malformed response body."""
 

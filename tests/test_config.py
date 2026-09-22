@@ -189,3 +189,72 @@ def test_load_config_elevenlabs_missing_voice_id_raises(tmp_path: Path) -> None:
     path = _write(tmp_path / "config.toml", "[engine.elevenlabs]\n")
     with pytest.raises(ConfigError, match=r"\[engine\.elevenlabs\].*voice_id"):
         load_config(path)
+
+
+def _breeze_toml(tmp_path: Path, extra_line: str) -> Path:
+    return _write(
+        tmp_path / "config.toml",
+        f"""
+        [engine.breeze]
+        weights_dir = "{tmp_path / "weights"}"
+        command = ["uv", "run", "breeze-infer-api"]
+        {extra_line}
+        """,
+    )
+
+
+def test_load_config_breeze_port_string_raises(tmp_path: Path) -> None:
+    path = _breeze_toml(tmp_path, 'port = "abc"')
+    with pytest.raises(ConfigError, match=r"\[engine\.breeze\]\.port: expected int, got str"):
+        load_config(path, cache_dir=tmp_path / "cache")
+
+
+def test_load_config_breeze_cfg_scale_int_accepted_for_float(tmp_path: Path) -> None:
+    path = _breeze_toml(tmp_path, "cfg_scale = 4")
+    config = load_config(path, cache_dir=tmp_path / "cache")
+    assert config.breeze is not None
+    assert config.breeze.cfg_scale == 4.0
+
+
+def test_load_config_breeze_cfg_scale_bool_raises(tmp_path: Path) -> None:
+    path = _breeze_toml(tmp_path, "cfg_scale = true")
+    with pytest.raises(
+        ConfigError, match=r"\[engine\.breeze\]\.cfg_scale: expected float, got bool"
+    ):
+        load_config(path, cache_dir=tmp_path / "cache")
+
+
+def test_load_config_breeze_command_non_string_item_raises(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "config.toml",
+        f"""
+        [engine.breeze]
+        weights_dir = "{tmp_path / "weights"}"
+        command = ["uv", 3]
+        """,
+    )
+    with pytest.raises(ConfigError, match=r"\[engine\.breeze\]\.command"):
+        load_config(path, cache_dir=tmp_path / "cache")
+
+
+def test_load_config_openai_speed_string_raises(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "config.toml",
+        """
+        [engine.openai]
+        base_url = "http://localhost:8880"
+        model = "kokoro"
+        voice = "af_heart"
+        speed = "fast"
+        """,
+    )
+    with pytest.raises(ConfigError, match=r"\[engine\.openai\]\.speed: expected float, got str"):
+        load_config(path)
+
+
+def test_load_config_elevenlabs_voice_id_int_raises(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", "[engine.elevenlabs]\nvoice_id = 12\n")
+    with pytest.raises(
+        ConfigError, match=r"\[engine\.elevenlabs\]\.voice_id: expected str, got int"
+    ):
+        load_config(path)

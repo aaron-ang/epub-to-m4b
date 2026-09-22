@@ -10,21 +10,23 @@ Only ``[engine.<name>]`` tables are understood. Each engine keeps its own
 frozen config dataclass (``BreezeConfig``, ``OpenAIConfig``,
 ``ElevenLabsConfig``, ``DeepgramConfig``) and ``AppConfig`` carries one
 optional field per engine. ``_build_engine_config`` merges a TOML table onto
-any of those dataclasses, driven by its declared fields: unknown keys and
-missing required keys raise ``ConfigError`` with the section named, rather
-than letting a bare TypeError/KeyError reach the user as a stack trace.
-Per-engine quirks (breeze's path/command coercion and injected cache_dir)
-are passed in as arguments, not special-cased inside the builder.
+any of those dataclasses, driven by its declared fields and annotations:
+unknown keys, missing required keys, and values of the wrong TOML type all
+raise ``ConfigError`` with the section and key named, rather than letting a
+bare TypeError/KeyError reach the user as a stack trace or a ``str`` land
+on an ``int`` field. Per-engine quirks (breeze's non-empty command check
+and injected cache_dir) are passed in as arguments, not special-cased
+inside the builder.
 """
 
 from __future__ import annotations
 
 import os
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args, get_origin, get_type_hints
 
 from epub_to_m4b.tts.breeze import BreezeConfig
 from epub_to_m4b.tts.deepgram import DeepgramConfig
@@ -116,14 +118,50 @@ def _sub_table(data: Mapping[str, object], *keys: str) -> Mapping[str, object] |
     return node if isinstance(node, Mapping) else None
 
 
-def _coerce_weights_dir(raw_value: object) -> Path:
-    return Path(str(raw_value)).expanduser()
-
-
-def _coerce_command(raw_value: object) -> list[str]:
+def _coerce_command(raw_value: object) -> object:
     if not isinstance(raw_value, list) or not raw_value:
         raise ConfigError("[engine.breeze].command must be a non-empty array of strings")
-    return [str(part) for part in raw_value]
+    return raw_value
+
+
+def _check_type(section: str, key: str, value: object, annotation: object) -> object:
+    """Reject a TOML value whose type doesn't fit the dataclass field.
+
+    ``bool`` is a subclass of ``int`` in Python but a distinct type in TOML,
+    so ``true`` is refused for ``int``/``float`` fields; ``int`` is accepted
+    for ``float`` because TOML has no way to write ``4`` as a float without
+    ``4.0``. ``Path`` fields take a TOML string and get ``~`` expanded here.
+    Any other annotation is a programming error in the config dataclass, not
+    a user error, so it raises ``TypeError`` to force a deliberate extension.
+    """
+    origin = get_origin(annotation)
+    if annotation in (str, bool):
+        ok = type(value) is annotation
+        expected = annotation.__name__
+    elif annotation is int:
+        ok = type(value) is int
+        expected = "int"
+    elif annotation is float:
+        ok = type(value) in (int, float)
+        expected = "float"
+    elif annotation is Path:
+        ok = isinstance(value, str)
+        expected = "str"
+        if ok:
+            value = Path(str(value)).expanduser()
+    elif origin in (Sequence, list, tuple) and get_args(annotation)[:1] == (str,):
+        ok = isinstance(value, list) and all(type(item) is str for item in value)
+        expected = "array of str"
+    else:
+        raise TypeError(
+            f"{section}.{key}: unsupported config field annotation {annotation!r}; "
+            "extend _check_type"
+        )
+    if not ok:
+        raise ConfigError(
+            f"[engine.{section}].{key}: expected {expected}, got {type(value).__name__}"
+        )
+    return value
 
 
 def _build_engine_config[C: DataclassInstance](
@@ -141,7 +179,8 @@ def _build_engine_config[C: DataclassInstance](
     The dataclass's own fields define the accepted keys, minus anything
     supplied through ``extra`` (values the tool injects itself rather than
     reads from TOML). ``coerce`` maps a key to a function applied to its raw
-    TOML value before construction.
+    TOML value before the per-field type check; every value then has to
+    match the field's annotation (see ``_check_type``).
     """
     accepted = {f.name for f in fields(config_cls)} - set(extra)
     unknown = sorted(set(table) - accepted)
@@ -152,9 +191,11 @@ def _build_engine_config[C: DataclassInstance](
         raise ConfigError(
             f"[engine.{section}] is missing required key(s): {', '.join(missing)}{missing_hint}"
         )
+    hints = get_type_hints(config_cls)
     kwargs: dict[str, object] = dict(extra)
     for key, raw_value in table.items():
-        kwargs[key] = coerce[key](raw_value) if key in coerce else raw_value
+        value = coerce[key](raw_value) if key in coerce else raw_value
+        kwargs[key] = _check_type(section, key, value, hints[key])
     return config_cls(**kwargs)
 
 
@@ -164,7 +205,7 @@ def _build_breeze_config(table: Mapping[str, object], *, cache_dir: Path) -> Bre
         BreezeConfig,
         section="breeze",
         required=_BREEZE_REQUIRED,
-        coerce={"weights_dir": _coerce_weights_dir, "command": _coerce_command},
+        coerce={"command": _coerce_command},
         extra={"cache_dir": cache_dir},
         missing_hint=(
             " - breeze ships no default command, so it must be fully configured before "

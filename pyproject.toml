@@ -4,7 +4,19 @@ version = "0.1.1"
 description = "Turn an EPUB into an M4B audiobook with a WebVTT transcript, using pluggable TTS engines."
 readme = "README.md"
 requires-python = ">=3.14"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["epub", "audiobook", "m4b", "tts", "text-to-speech", "webvtt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
     "ebooklib>=0.19",
     "beautifulsoup4>=4.13",
@@ -15,6 +27,12 @@ dependencies = [
     "httpx>=0.28",
     "mutagen>=1.47",
 ]
+
+[project.urls]
+Homepage = "https://github.com/aaron-ang/epub-to-m4b"
+Repository = "https://github.com/aaron-ang/epub-to-m4b"
+Issues = "https://github.com/aaron-ang/epub-to-m4b/issues"
+Changelog = "https://github.com/aaron-ang/epub-to-m4b/blob/main/CHANGELOG.md"
 
 [project.scripts]
 epub-to-m4b = "epub_to_m4b.cli:main"
@@ -77,3 +95,11 @@ markers = [
     "network: hits a paid API",
 ]
 addopts = "-m 'not gpu and not network'"
+
+[tool.coverage.run]
+source = ["epub_to_m4b"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true

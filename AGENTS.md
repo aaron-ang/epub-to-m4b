@@ -14,37 +14,21 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 
 ## Layout
 
-| Path                     | Responsibility                                                                      |
-|--------------------------|-------------------------------------------------------------------------------------|
-| `cli.py`                 | argparse: `chapters` / `dump-text` / `convert`; m4b freshness check; atomic encode  |
-| `config.py`              | Config path resolution; `[engine.*]` tables -> `AppConfig`; `E2M_CACHE_DIR`         |
-| `book.py`                | `Book`, `Chapter`, `Paragraph`, `Sentence`, `AudioClip`                             |
-| `errors.py`              | `EpubToM4bError`: base for user-facing errors; CLI prints `error: <message>`, exit 1 |
-| `epub/reader.py`         | ebooklib -> `Book` (DC metadata, cover, spine docs)                                 |
-| `epub/html.py`           | BeautifulSoup(lxml) DOM walk -> `list[Paragraph]`                                   |
-| `epub/chapters.py`       | TOC -> spine mapping, heading fallback, running-header removal, stub merge          |
-| `text/__init__.py`       | `TEXT_PIPELINE_VERSION`: sha256 of the docstring-stripped AST of the text pipeline  |
-| `text/normalize.py`      | `normalize(text, lang="en") -> str`; dispatches to `text/lang/<lang>.py`            |
-| `text/lang/english.py`   | Decades, years, ordinals, roman numerals (headings), clock, math, thousands, abbreviations |
-| `text/lang/tables_en.py` | Lookup tables for `english.py`                                                      |
-| `text/split.py`          | `Paragraph -> list[str]`; char cap; hard/soft/space/hard-cut; short merge           |
-| `tts/base.py`            | `TTSEngine` ABC, pcm16 <-> float32 helpers, `fingerprint_digest`                    |
-| `tts/registry.py`        | name -> factory(`AppConfig`); the only place API keys are read from env             |
-| `tts/http.py`            | Retrying POST for API engines (backoff, `Retry-After`)                              |
-| `tts/guard.py`           | Runaway-clip budget math: retry/cut limits, `max_new_tokens`, `cut_and_fade`, `apply_guard` |
-| `tts/sidecar.py`         | Spawn or adopt a local HTTP TTS server; health poll; log file                       |
-| `tts/breeze.py`          | `BreezeEngine`: batch endpoint, 409 wait, reference voice, guard                    |
-| `tts/openai_compat.py`   | OpenAI-compatible `/v1/audio/speech`                                                |
-| `tts/elevenlabs.py`      | ElevenLabs `/v1/text-to-speech/{voice}`                                             |
-| `tts/deepgram.py`        | Deepgram Aura `/v1/speak`                                                           |
-| `tts/fake.py`            | `SilenceEngine`, `ToneEngine` for tests and dry runs                                |
-| `synth/cache.py`         | Content-addressed FLAC store, chapter manifests, atomic writes, invalidation        |
-| `synth/batching.py`      | Length-sorted windows across chapters                                               |
-| `synth/orchestrator.py`  | sentences -> missing -> batches -> engine -> cache; `GapPolicy`                     |
-| `audio/assemble.py`      | clips + gaps -> chapter FLAC; records offsets                                       |
-| `audio/ffmpeg.py`        | Command builders + subprocess: concat, ffmetadata, AAC encode, ffprobe              |
-| `audio/metadata.py`      | ffmetadata text (title/artist/album/chapters); mutagen cover                        |
-| `audio/vtt.py`           | `(text, start, end)` cues -> WEBVTT                                                 |
+| Path                 | Responsibility                                                 |
+|----------------------|----------------------------------------------------------------|
+| `cli.py`             | argparse: `chapters` / `dump-text` / `convert`; atomic encode  |
+| `config.py`          | Config path resolution; `[engine.*]` tables -> `AppConfig`     |
+| `book.py`            | `Book`, `Chapter`, `Paragraph`, `Sentence`, `AudioClip`        |
+| `errors.py`          | `EpubToM4bError`: base for user-facing errors; CLI exit 1      |
+| `epub/`              | ebooklib + BeautifulSoup -> `Book`; TOC/heading chaptering     |
+| `text/`              | Normalisation (per language), sentence split, pipeline hash    |
+| `tts/`               | `TTSEngine` ABC, registry, engines, HTTP retry, sidecar, guard |
+| `synth/`             | Clip cache, batching, orchestrator                             |
+| `audio/`             | Chapter assembly, ffmpeg, metadata, VTT                        |
+| `tests/`             | Mirrors `src/`; `tests/helpers.py` shared builders             |
+| `.github/workflows/` | CI + release                                                   |
+| `Makefile`           | `check` / `format` / `coverage` / `ci` targets                 |
+| `pyproject.toml`     | Deps, ruff, mypy, pytest markers + `addopts`                   |
 
 ## Conventions
 
@@ -52,7 +36,7 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 - `audio/` owns files; everything upstream works with in-memory dataclasses.
 - No inline `[break]`/`[pause]` markers. Gaps are `Sentence.gap_after`, computed deterministically from punctuation.
 - API keys come from the env var named by `api_key_env`, read in `tts/registry.py` only. Never in TOML, never in engines.
-- Engine-specific behaviour (Breeze guard, 409 wait, reference voice) lives in that engine's module, not the ABC.
+- Engine-specific behaviour lives in that engine's module, not the ABC. Sidecar lifecycle (spawn/adopt, health poll, busy-wait, child env) lives in `tts/sidecar.py` behind `SidecarPolicy` and is shared by every sidecar engine.
 - Adopted sidecar servers are never killed on `close()`.
 - Clips, chapter FLACs, manifests, and the `.m4b` land via `synth/cache.py:atomic_replace` (temp file + `os.replace`).
 - No plugin/entry-point mechanism; engines are registered in `_ENGINES`.
@@ -97,16 +81,27 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 | `elevenlabs` | required              | 1             | 2                 |
 | `deepgram`   | optional (all defaults) | 1           | 4                 |
 
+Sidecar engines call `start_or_adopt(command, port, log_path=..., policy=SidecarPolicy(...), env=...)` and wrap busy-prone POSTs in `post_until_free(send, policy=..., on_busy=...)`.
+
 API engines (`openai_compat`, `elevenlabs`, `deepgram`) share `tts/http.py`: retry with backoff on transport errors and 408/429/5xx, honour `Retry-After`, raise `TTSError` after exhausting retries.
 
-Breeze keeps `breeze-server-<port>.log` and `breeze/reference_voice.{wav,txt}` under `cache_dir`. The reference wav's hash is part of the fingerprint.
+Sidecar engines write `<name>-server-<port>.log` under `cache_dir`.
+
+Engine notes:
+
+| Engine                             | Notes                                                                                                                                          |
+|------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| `breeze`                           | Reference voice files under `cache_dir/breeze/`; wav hash in fingerprint; runaway guard from `tts/guard.py`; 409 busy-wait via `SidecarPolicy` |
+| `openai`, `elevenlabs`, `deepgram` | `tts/http.py` retry                                                                                                                            |
+| `silence`, `tone`                  | none                                                                                                                                           |
 
 ## Adding an engine
 
 1. Create `tts/<name>.py` with a frozen `<Name>Config` dataclass and a `TTSEngine` subclass.
-2. Add an `AppConfig` field in `config.py` and a `_build_engine_config` call in `load_config` (accepted keys are derived from the dataclass fields; pass `required=`).
-3. Add a factory to `_ENGINES` in `tts/registry.py`. Read the API key there via `_api_key`.
-4. Add tests using `httpx.MockTransport`.
+2. Sidecar engine? Use `start_or_adopt` + `post_until_free` from `tts/sidecar.py`; pass engine-specific env via `env=`.
+3. Add an `AppConfig` field in `config.py` and a `_build_engine_config` call in `load_config` (accepted keys are derived from the dataclass fields; pass `required=`).
+4. Add a factory to `_ENGINES` in `tts/registry.py`. Read the API key there via `_api_key`.
+5. Add tests using `httpx.MockTransport`.
 
 ## Cache layout
 
@@ -137,10 +132,10 @@ make ci         # alias of make check
 
 | pytest marker | Meaning                                  | Run with                   |
 |---------------|------------------------------------------|----------------------------|
-| `gpu`         | Needs a running Breeze sidecar and CUDA  | `uv run pytest -m gpu`     |
+| `sidecar`     | Needs a running local TTS sidecar server | `uv run pytest -m sidecar` |
 | `network`     | Hits a paid API                          | `uv run pytest -m network` |
 
-Both markers are excluded by default via `addopts`. No test currently carries either; the suite runs on `silence`/`tone` and `httpx.MockTransport`.
+Both markers are excluded via `addopts`; no test carries either. The suite runs on `silence`/`tone` and `httpx.MockTransport`.
 
 | Workflow                                | Trigger                     | Does                                                                                   |
 |-----------------------------------------|-----------------------------|----------------------------------------------------------------------------------------|
@@ -165,16 +160,14 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause cut / paragraph / heading |
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, doubling backoff, Retry-After cap |
 | `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size |
-| `_REFERENCE_TIMEOUT_SECONDS`, `_BATCH_TIMEOUT_SECONDS` | `tts/breeze.py` | HTTP timeouts for reference-voice and batch POSTs |
-| `_BUSY_STATUS`, `_BUSY_RETRIES`, `_BUSY_WAIT_SECONDS` | `tts/breeze.py` | 409 busy handling: status, attempts, wait between attempts |
+| `_SIDECAR_ENV` | `tts/breeze.py` | Env vars the Breeze server child gets when spawned (`TRITON_PTXAS_PATH`) |
 | `CLIP_BASE_SECONDS`, `CLIP_SECONDS_PER_CHAR` | `tts/guard.py` | Duration budget that triggers a reseed retry |
 | `CUT_SECONDS_PER_CHAR` | `tts/guard.py` | Duration budget beyond which a clip is truncated |
 | `TOKENS_PER_SECOND` | `tts/guard.py` | Codec audio tokens per second, for the server-side token cap |
 | `TOKEN_CAP_SLACK` | `tts/guard.py` | Multiplier loosening the server-side token cap |
 | `FADE_SECONDS` | `tts/guard.py` | Fade-out applied to a truncated clip |
 | `RUNAWAY_RETRIES` | `tts/guard.py` | Reseed attempts before cutting |
-| `_HEALTH_TIMEOUT_SECONDS`, `_POLL_INTERVAL_SECONDS` | `tts/sidecar.py` | `/health` request timeout and poll spacing |
-| `_STARTUP_TIMEOUT_SECONDS`, `_TERMINATE_TIMEOUT_SECONDS` | `tts/sidecar.py` | Wait for server ready; wait for graceful exit before kill |
+| `SidecarPolicy` defaults | `tts/sidecar.py` | Health/poll/startup/terminate timeouts, single-request and batch timeouts, busy status + retries + wait |
 
 ## Reference material
 

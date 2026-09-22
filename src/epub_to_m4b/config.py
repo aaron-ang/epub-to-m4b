@@ -128,9 +128,10 @@ def _check_type(section: str, key: str, value: object, annotation: object) -> ob
     """Reject a TOML value whose type doesn't fit the dataclass field.
 
     ``bool`` is a subclass of ``int`` in Python but a distinct type in TOML,
-    so ``true`` is refused for ``int``/``float`` fields; ``int`` is accepted
-    for ``float`` because TOML has no way to write ``4`` as a float without
-    ``4.0``. ``Path`` fields take a TOML string and get ``~`` expanded here.
+    so ``true`` is refused for ``int``/``float`` fields; an ``int`` for a
+    ``float`` field is converted to ``float`` because TOML has no way to
+    write ``4`` as a float without ``4.0``. ``Path`` fields take a TOML
+    string and get ``~`` expanded here.
     Any other annotation is a programming error in the config dataclass, not
     a user error, so it raises ``TypeError`` to force a deliberate extension.
     """
@@ -144,6 +145,8 @@ def _check_type(section: str, key: str, value: object, annotation: object) -> ob
     elif annotation is float:
         ok = type(value) in (int, float)
         expected = "float"
+        if ok and isinstance(value, int | float):
+            value = float(value)
     elif annotation is Path:
         ok = isinstance(value, str)
         expected = "str"

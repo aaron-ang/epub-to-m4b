@@ -213,6 +213,7 @@ def test_load_config_breeze_cfg_scale_int_accepted_for_float(tmp_path: Path) -> 
     path = _breeze_toml(tmp_path, "cfg_scale = 4")
     config = load_config(path, cache_dir=tmp_path / "cache")
     assert config.breeze is not None
+    assert type(config.breeze.cfg_scale) is float
     assert config.breeze.cfg_scale == 4.0
 
 

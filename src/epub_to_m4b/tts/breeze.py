@@ -148,9 +148,9 @@ class BreezeEngine(TTSEngine):
             chunk = all_texts[start : start + self.config.batch_size]
             clips.extend(self._synthesize_chunk(chunk, seed=self.config.seed))
 
-        def reseed(text: str, attempt: int) -> AudioClip:
-            (clip,) = self._synthesize_chunk([text], seed=self.config.seed + attempt)
-            return clip
+        def reseed(texts: Sequence[str], attempt: int) -> list[AudioClip]:
+            # The runaway subset never exceeds one incoming batch, so it fits one POST.
+            return self._synthesize_chunk(list(texts), seed=self.config.seed + attempt)
 
         guarded, notes = guard.apply_guard(clips, all_texts, reseed)
         for note in notes:

@@ -281,6 +281,7 @@ def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
     retry_limit = guard.retry_limit_seconds(text)
     runaway_seconds = retry_limit + 5.0
     recovered_seconds = retry_limit - 0.5
+    batch_calls: list[tuple[list[str], int]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
@@ -294,12 +295,11 @@ def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
         if request.url.path == "/v1/audio/speech/batch":
             fields = _parse_multipart(request)
             texts = json.loads(fields["texts"])
-            if len(texts) == 1 and texts[0] == text:
-                # this is a reseed retry (single-text batch) - comes back short
-                segments = [_pcm_bytes(recovered_seconds)]
-            else:
-                # the original batched call - runs away
-                segments = [_pcm_bytes(runaway_seconds) for _ in texts]
+            seed = int(fields["seed"])
+            batch_calls.append((texts, seed))
+            # the original batched call runs away; the reseed comes back short
+            seconds = runaway_seconds if seed == config.seed else recovered_seconds
+            segments = [_pcm_bytes(seconds) for _ in texts]
             return httpx.Response(
                 200,
                 content=b"".join(segments),
@@ -318,6 +318,111 @@ def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
     engine.close()
 
     assert clip.seconds <= retry_limit + 0.01
+    assert batch_calls == [([text], config.seed), ([text], config.seed + 1)]
+
+
+def test_several_runaways_reseed_as_one_post_per_attempt(tmp_path: Path) -> None:
+    ok, run_a, run_b = "fine", "runaway alpha", "runaway beta"
+    limit = min(guard.retry_limit_seconds(run_a), guard.retry_limit_seconds(run_b))
+    batch_calls: list[tuple[list[str], int]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(
+                200,
+                content=_pcm_bytes(1.0),
+                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
+            )
+        if request.url.path == "/v1/audio/speech/batch":
+            fields = _parse_multipart(request)
+            texts = json.loads(fields["texts"])
+            seed = int(fields["seed"])
+            batch_calls.append((texts, seed))
+            if seed == config.seed:
+                segments = [_pcm_bytes(0.1 if t == ok else limit + 5.0) for t in texts]
+            else:
+                segments = [_pcm_bytes(limit - 0.5) for _ in texts]
+            return httpx.Response(
+                200,
+                content=b"".join(segments),
+                headers={
+                    "X-Segment-Bytes": ",".join(str(len(s)) for s in segments),
+                    "X-Sample-Rate": str(_SAMPLE_RATE),
+                },
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    transport = httpx.MockTransport(handler)
+    config = _config(tmp_path)
+    engine = BreezeEngine(config, transport=transport)
+
+    clips = engine.synthesize([ok, run_a, run_b])
+    engine.close()
+
+    # one original POST, then exactly one reseed POST carrying both runaways
+    assert batch_calls == [
+        ([ok, run_a, run_b], config.seed),
+        ([run_a, run_b], config.seed + 1),
+    ]
+    assert clips[0].seconds <= 0.11
+    assert clips[1].seconds <= guard.retry_limit_seconds(run_a)
+    assert clips[2].seconds <= guard.retry_limit_seconds(run_b)
+
+
+def test_runaways_still_over_limit_get_second_attempt_post(tmp_path: Path) -> None:
+    run_a, run_b = "runaway alpha", "runaway beta"
+    limit = min(guard.retry_limit_seconds(run_a), guard.retry_limit_seconds(run_b))
+    batch_calls: list[tuple[list[str], int]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(
+                200,
+                content=_pcm_bytes(1.0),
+                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
+            )
+        if request.url.path == "/v1/audio/speech/batch":
+            fields = _parse_multipart(request)
+            texts = json.loads(fields["texts"])
+            seed = int(fields["seed"])
+            batch_calls.append((texts, seed))
+            if seed == config.seed + 1:
+                # attempt 1: alpha recovers, beta still runs away
+                segments = [_pcm_bytes(limit - 0.5 if t == run_a else limit + 4.0) for t in texts]
+            elif seed == config.seed + 2:
+                segments = [_pcm_bytes(limit - 0.5) for _ in texts]
+            else:
+                segments = [_pcm_bytes(limit + 5.0) for _ in texts]
+            return httpx.Response(
+                200,
+                content=b"".join(segments),
+                headers={
+                    "X-Segment-Bytes": ",".join(str(len(s)) for s in segments),
+                    "X-Sample-Rate": str(_SAMPLE_RATE),
+                },
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    transport = httpx.MockTransport(handler)
+    config = _config(tmp_path)
+    engine = BreezeEngine(config, transport=transport)
+
+    clips = engine.synthesize([run_a, run_b])
+    engine.close()
+
+    assert batch_calls == [
+        ([run_a, run_b], config.seed),
+        ([run_a, run_b], config.seed + 1),
+        ([run_b], config.seed + 2),
+    ]
+    assert all(
+        c.seconds <= guard.retry_limit_seconds(t)
+        for c, t in zip(clips, [run_a, run_b], strict=True)
+    )
 
 
 def test_fingerprint_is_stable_and_changes_with_reference_voice(tmp_path: Path) -> None:

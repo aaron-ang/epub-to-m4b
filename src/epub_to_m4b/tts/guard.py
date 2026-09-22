@@ -69,15 +69,19 @@ def cut_and_fade(
 def apply_guard(
     clips: Sequence[AudioClip],
     texts: Sequence[str],
-    reseed_fn: Callable[[str, int], AudioClip],
+    reseed_fn: Callable[[Sequence[str], int], list[AudioClip]],
 ) -> tuple[list[AudioClip], list[str]]:
     """Retry runaway clips with fresh seeds, then cut+fade anything still too long.
 
-    ``reseed_fn(text, attempt)`` is called for ``attempt`` in ``1..RUNAWAY_RETRIES``
-    (the caller's closure decides what that attempt number means as an actual
-    seed - this function only tries up to ``RUNAWAY_RETRIES`` additional
-    attempts and keeps the shortest result each time, stopping early once one
-    comes in under the retry limit).
+    Reseeding is batched: ``reseed_fn(texts, attempt)`` is called once per
+    ``attempt`` in ``1..RUNAWAY_RETRIES`` with only the texts whose best clip
+    so far is still over the retry limit, and must return one clip per text
+    in the same order. The caller's closure decides what the attempt number
+    means as an actual seed. For each text the shortest candidate seen wins,
+    and a text leaves the retry set once its best is under the limit; the
+    loop stops early when the set empties. One round trip per attempt for the
+    whole batch is what keeps several runaways from each paying the full
+    fixed cost of a separate request.
 
     Returns the guarded clips alongside human-readable notes for anything
     that needed a retry or a cut - diagnostic signal a real user would want,
@@ -86,37 +90,40 @@ def apply_guard(
     if len(clips) != len(texts):
         raise ValueError(f"got {len(clips)} clips for {len(texts)} texts")
 
-    guarded: list[AudioClip] = []
+    best = list(clips)
+    limits = [retry_limit_seconds(text) for text in texts]
+    runaway = [i for i, clip in enumerate(clips) if clip.seconds > limits[i]]
+    flagged = list(runaway)
+
+    for attempt in range(1, RUNAWAY_RETRIES + 1):
+        if not runaway:
+            break
+        candidates = reseed_fn([texts[i] for i in runaway], attempt)
+        if len(candidates) != len(runaway):
+            raise ValueError(f"reseed returned {len(candidates)} clips for {len(runaway)} texts")
+        for i, candidate in zip(runaway, candidates, strict=True):
+            if candidate.seconds < best[i].seconds:
+                best[i] = candidate
+        runaway = [i for i in runaway if best[i].seconds > limits[i]]
+
     notes: list[str] = []
-    for clip, text in zip(clips, texts, strict=True):
-        limit = retry_limit_seconds(text)
-        if clip.seconds <= limit:
-            guarded.append(clip)
-            continue
-
-        best = clip
-        for attempt in range(1, RUNAWAY_RETRIES + 1):
-            candidate = reseed_fn(text, attempt)
-            if candidate.seconds < best.seconds:
-                best = candidate
-            if best.seconds <= limit:
-                break
-
+    for i in flagged:
+        text = texts[i]
+        clip = best[i]
         cut_limit = cut_limit_seconds(text)
-        if best.seconds > cut_limit:
-            cut_samples = cut_and_fade(best.samples, best.sample_rate, cut_limit)
-            best = AudioClip(samples=cut_samples, sample_rate=best.sample_rate)
+        if clip.seconds > cut_limit:
+            cut_samples = cut_and_fade(clip.samples, clip.sample_rate, cut_limit)
+            best[i] = AudioClip(samples=cut_samples, sample_rate=clip.sample_rate)
             notes.append(
                 f"runaway clip cut to {cut_limit:.1f}s after {RUNAWAY_RETRIES} retries: "
                 f"{text[:60]!r}"
             )
-        elif best.seconds > limit:
+        elif clip.seconds > limits[i]:
             notes.append(
-                f"slow clip kept at {best.seconds:.1f}s after {RUNAWAY_RETRIES} retries: "
+                f"slow clip kept at {clip.seconds:.1f}s after {RUNAWAY_RETRIES} retries: "
                 f"{text[:60]!r}"
             )
         else:
             notes.append(f"runaway clip recovered with a reseed: {text[:60]!r}")
-        guarded.append(best)
 
-    return guarded, notes
+    return best, notes

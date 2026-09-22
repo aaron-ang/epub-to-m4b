@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import sys
 import tempfile
@@ -75,12 +76,29 @@ def _add_book_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-chars", type=int, default=200)
 
 
+def _configure_logging() -> None:
+    """Route this package's INFO logs (engine guard notes, busy waits) to stderr.
+
+    Only the ``epub_to_m4b`` logger gets a handler - not the root - so
+    third-party INFO chatter such as httpx request lines stays quiet. Idempotent
+    so repeated ``main()`` calls in one process don't stack handlers.
+    """
+    package_logger = logging.getLogger("epub_to_m4b")
+    if package_logger.handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    package_logger.addHandler(handler)
+    package_logger.setLevel(logging.INFO)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):
         parser.print_help()
         return 1
+    _configure_logging()
     try:
         book = read_book(args.epub, toc_depth=args.toc_depth, min_chars=args.min_chars)
     except (OSError, ValueError, KeyError) as exc:

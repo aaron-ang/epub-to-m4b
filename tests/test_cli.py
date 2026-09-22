@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -111,3 +113,44 @@ def test_convert_missing_ffmpeg_errors_cleanly(
     assert "ffmpeg" in err
     assert "Traceback" not in err
     assert not out_dir.exists()
+
+
+@pytest.fixture
+def clean_package_logger() -> Iterator[logging.Logger]:
+    """Package logger as a fresh process would see it: no handlers, NOTSET level.
+
+    ``main()`` attaches a stderr handler once per process; without this reset an
+    earlier test's call would have bound it to that test's captured stream.
+    """
+    package_logger = logging.getLogger("epub_to_m4b")
+    saved = (list(package_logger.handlers), package_logger.level)
+    package_logger.handlers.clear()
+    package_logger.setLevel(logging.NOTSET)
+    yield package_logger
+    package_logger.handlers[:] = saved[0]
+    package_logger.setLevel(saved[1])
+
+
+def test_main_attaches_one_info_handler_to_package_logger(
+    tiny_epub: Path, capsys: pytest.CaptureFixture[str], clean_package_logger: logging.Logger
+) -> None:
+    assert main(["chapters", str(tiny_epub)]) == 0
+    assert clean_package_logger.level == logging.INFO
+    assert len(clean_package_logger.handlers) == 1
+
+    # a second main() in the same process must not stack a second handler
+    assert main(["chapters", str(tiny_epub)]) == 0
+    assert len(clean_package_logger.handlers) == 1
+
+    capsys.readouterr()
+    logging.getLogger("epub_to_m4b.tts.breeze").info("Breeze %s", "runaway clip recovered")
+    assert capsys.readouterr().err == "Breeze runaway clip recovered\n"
+
+
+def test_main_leaves_third_party_loggers_quiet(
+    tiny_epub: Path, capsys: pytest.CaptureFixture[str], clean_package_logger: logging.Logger
+) -> None:
+    assert main(["chapters", str(tiny_epub)]) == 0
+    capsys.readouterr()
+    logging.getLogger("httpx").info("GET /health")
+    assert capsys.readouterr().err == ""

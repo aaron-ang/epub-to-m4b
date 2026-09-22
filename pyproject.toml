@@ -65,12 +65,10 @@ module = ["ebooklib.*", "soundfile", "num2words"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# mutagen ships a py.typed marker but its own constructors/methods are
-# untyped, so ignore_missing_imports (for modules mypy can't find at all)
-# has no effect here; skip following it instead so calls resolve to Any.
-module = ["mutagen.*"]
-follow_imports = "skip"
-ignore_missing_imports = true
+# mutagen ships py.typed but leaves MP4/MP4Cover/save untyped; keep its
+# types and allow the untyped calls only where they happen.
+module = ["epub_to_m4b.audio.metadata"]
+disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

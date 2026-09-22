@@ -1,9 +1,9 @@
 """Spawn or adopt a local HTTP TTS server.
 
-Self-hosted engines (Breeze today, others later) run as a separate process
-so this project never needs to import their heavy ML dependencies directly.
-This module is deliberately engine-agnostic: it knows nothing about Breeze's
-request/response shapes, only that ``GET {base_url}/health`` answers ``200
+Self-hosted engines run as a separate process so this project never needs
+to import their heavy ML dependencies directly. This module is deliberately
+engine-agnostic: it knows nothing about any engine's request/response
+shapes, only that ``GET {base_url}/health`` answers ``200
 {"status": "ok", "sample_rate": N}`` once ready and ``503
 {"status": "loading"}`` while starting up.
 

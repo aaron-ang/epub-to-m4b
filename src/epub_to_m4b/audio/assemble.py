@@ -1,9 +1,9 @@
 """Sentence/clip pairs -> one chapter audio file, with silence gaps between.
 
-M3 keeps this to a single in-memory concatenation per chapter (books are
-small enough that this is not a problem); a real streaming writer that
-appends to a ``soundfile.SoundFile`` block-by-block would be a drop-in
-replacement here if a chapter ever got too large to hold in memory.
+Each chapter is concatenated in memory in one pass (chapters are small
+enough for this); a streaming writer that appends to a
+``soundfile.SoundFile`` block-by-block would be a drop-in replacement here
+if a chapter ever got too large to hold in memory.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Text normalization and sentence-splitting pipeline.
 
-``TEXT_PIPELINE_VERSION`` is part of the resume cache key computed in a later
-milestone (``synth/cache.py``): ``sha256(text_pipeline_version, text)``. It is
+``TEXT_PIPELINE_VERSION`` is part of the resume cache key that
+``synth/cache.py`` computes: ``sha256(text_pipeline_version, text)``. It is
 a hash of this pipeline's own source, so any edit to ``text/normalize.py``,
 ``text/split.py``, or ``text/lang/*`` automatically invalidates stale cached
 clips from before the change, instead of relying on someone remembering to

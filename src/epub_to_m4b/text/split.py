@@ -4,10 +4,9 @@ Splits on sentence punctuation, force-cuts anything still too long at the
 best available punctuation/space, then merges orphan-short fragments back
 into a neighbor.
 
-This module only produces raw sentence text. A later milestone wraps each
-string into a ``Sentence`` with a computed ``gap_after`` - the orchestrator
-owns gaps between clips, not the splitter, so that logic is out of scope
-here.
+This module only produces raw sentence text. The orchestrator wraps each
+string into a ``Sentence`` with a computed ``gap_after`` - it owns gaps
+between clips, not the splitter, so that logic is out of scope here.
 """
 
 from __future__ import annotations

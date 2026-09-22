@@ -76,7 +76,6 @@ class TTSEngine(ABC):
     sample_rate: int
     max_batch: int = 1          # texts per synthesize() call
     max_concurrency: int = 1    # parallel synthesize() calls allowed
-    max_chars: int = 4096       # provider limit; the splitter's 125-char cap stays far below
     @abstractmethod
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]: ...
     @abstractmethod

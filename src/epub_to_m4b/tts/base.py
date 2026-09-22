@@ -48,7 +48,6 @@ class TTSEngine(ABC):
     sample_rate: int
     max_batch: int = 1
     max_concurrency: int = 1
-    max_chars: int = 4096
 
     @abstractmethod
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]: ...

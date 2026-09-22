@@ -42,9 +42,9 @@ GPU and paid-API tests are excluded by default (`-m 'not gpu and not network'`).
 | `feat:` | minor |
 | `feat!:` / `BREAKING CHANGE:` footer | minor |
 
-1. Merges to `main` make [release-please](https://github.com/googleapis/release-please) open or update a release PR (`.github/workflows/release-please.yml`) with the version bump and `CHANGELOG.md` entry.
+1. Merges to `main` make [release-please](https://github.com/googleapis/release-please) open or update a release PR (`.github/workflows/release.yml`) with the version bump and `CHANGELOG.md` entry.
 2. Merging that PR tags `vX.Y.Z` and publishes a GitHub Release.
-3. The GitHub Release triggers `.github/workflows/publish.yml`: `uv build`, then upload to PyPI via Trusted Publishing (OIDC, no token).
+3. The same workflow's `publish` job then runs at the new tag: `uv build`, upload to PyPI via Trusted Publishing (OIDC, no token). Re-run by hand: Actions → `release` → Run workflow with `tag`.
 
 ## Architecture
 

@@ -145,8 +145,7 @@ Both markers are excluded by default via `addopts`. No test currently carries ei
 | Workflow                                | Trigger                     | Does                                                                                   |
 |-----------------------------------------|-----------------------------|----------------------------------------------------------------------------------------|
 | `.github/workflows/ci.yml`              | push to `main`, PR          | `make check`, `uv build`, runs the built wheel with `--version`                        |
-| `.github/workflows/release-please.yml`  | push to `main`              | Opens/updates the release PR from Conventional Commits; merging tags `vX.Y.Z` and creates a GitHub Release; versions tracked in `.release-please-manifest.json`, config in `release-please-config.json` |
-| `.github/workflows/publish.yml`         | GitHub Release published    | `uv build`, upload to PyPI via Trusted Publishing (OIDC, environment `pypi`)          |
+| `.github/workflows/release.yml`         | push to `main`; `workflow_dispatch` with `tag` | `release-please` job opens/updates the release PR from Conventional Commits and, on merge, tags `vX.Y.Z` + creates a GitHub Release; `publish` job then `uv build`s at that tag and uploads to PyPI via Trusted Publishing (OIDC, environment `pypi`). Versions in `.release-please-manifest.json`, config in `release-please-config.json` |
 
 ## Tunables
 

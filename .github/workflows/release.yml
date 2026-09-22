@@ -1,0 +1,48 @@
+name: release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and upload to PyPI (e.g. v0.2.0)
+        required: true
+        type: string
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Releases created with GITHUB_TOKEN fire no `release` event, and PyPI
+  # Trusted Publishing rejects reusable workflows, so publishing lives here.
+  publish:
+    needs: release-please
+    if: >-
+      ${{ !cancelled() && (
+        needs.release-please.outputs.release_created == 'true'
+        || github.event_name == 'workflow_dispatch'
+      ) }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+      - uses: astral-sh/setup-uv@v7
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -346,3 +346,28 @@ def test_store_chapter_writes_manifest_only_after_flac_is_in_place(
     # stale rather than trusting a partial write.
     assert not cache.chapter_manifest_path(tmp_path, _SHA, 0).is_file()
     assert _current(tmp_path) is None
+
+
+# --- encode-settings stamp ---------------------------------------------
+
+
+def test_encode_digest_round_trips_under_book_work_dir(tmp_path: Path) -> None:
+    assert cache.load_encode_digest(tmp_path, _SHA) is None
+    cache.store_encode_digest(tmp_path, _SHA, "abc123")
+    assert cache.encode_stamp_path(tmp_path, _SHA).parent == cache.book_work_dir(tmp_path, _SHA)
+    assert cache.load_encode_digest(tmp_path, _SHA) == "abc123"
+
+
+def test_clear_encode_digest_removes_stamp_and_tolerates_absence(tmp_path: Path) -> None:
+    cache.clear_encode_digest(tmp_path, _SHA)  # nothing there yet: no error
+    cache.store_encode_digest(tmp_path, _SHA, "abc123")
+    cache.clear_encode_digest(tmp_path, _SHA)
+    assert cache.load_encode_digest(tmp_path, _SHA) is None
+
+
+@pytest.mark.parametrize("content", ["", "not json", "[]", '{"other": 1}'])
+def test_unreadable_encode_stamp_counts_as_unknown(tmp_path: Path, content: str) -> None:
+    path = cache.encode_stamp_path(tmp_path, _SHA)
+    path.parent.mkdir(parents=True)
+    path.write_text(content, encoding="utf-8")
+    assert cache.load_encode_digest(tmp_path, _SHA) is None

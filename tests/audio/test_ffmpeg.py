@@ -11,6 +11,7 @@ from epub_to_m4b.audio.ffmpeg import (
     concat_command,
     concat_list,
     encode_m4b_command,
+    encode_settings_digest,
     ffprobe_chapters_command,
     require_ffmpeg,
     run_command,
@@ -55,7 +56,7 @@ def test_concat_command_args() -> None:
 
 def test_encode_m4b_command_args() -> None:
     audio, meta, out = Path("/tmp/combined.flac"), Path("/tmp/meta.txt"), Path("/tmp/out.m4b")
-    args = encode_m4b_command(audio, meta, out)
+    args = encode_m4b_command(audio, meta, out, sample_rate=24000)
     assert args == [
         "ffmpeg",
         "-y",
@@ -69,14 +70,28 @@ def test_encode_m4b_command_args() -> None:
         "1",
         "-map",
         "0:a",
+        "-af",
+        "loudnorm=I=-16.0",
+        "-ar",
+        "24000",
         "-c:a",
         "aac",
         "-b:a",
-        "64k",
+        "96k",
         "-f",
         "mp4",
         "/tmp/out.m4b",
     ]
+
+
+def test_encode_settings_digest_tracks_encode_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    base = encode_settings_digest()
+    assert base == encode_settings_digest()
+    monkeypatch.setattr("epub_to_m4b.audio.ffmpeg.AAC_BITRATE", "128k")
+    assert encode_settings_digest() != base
+    monkeypatch.undo()
+    monkeypatch.setattr("epub_to_m4b.audio.ffmpeg.LOUDNESS_TARGET_LUFS", -18.0)
+    assert encode_settings_digest() != base
 
 
 def test_ffprobe_chapters_command_args() -> None:

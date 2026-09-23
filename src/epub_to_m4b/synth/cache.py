@@ -15,6 +15,11 @@ Two layers, both flat files under ``os.replace``-atomic writes, no database:
     offsets, duration) so a rerun can tell whether the chapter is still
     current without re-running ``audio/assemble.py`` or touching ffmpeg.
 
+``<out_dir>/.work/<book_sha256[:16]>/encode.json``
+    The encode-settings digest (``audio/ffmpeg.encode_settings_digest``) the
+    book's m4b was last built with, so any change to the encode arguments
+    rebuilds it even when no chapter flac changed.
+
 Any cache hit that fails to open, or is zero-length, counts as a miss: the
 bad file is deleted and the caller re-synthesizes/re-assembles rather than
 letting a corrupt entry wedge the pipeline.
@@ -294,3 +299,33 @@ def store_chapter(
 
     atomic_replace(chapter_manifest_path(out_dir, book_sha256, chapter_index), write_manifest)
     return manifest
+
+
+def encode_stamp_path(out_dir: Path, book_sha256: str) -> Path:
+    return book_work_dir(out_dir, book_sha256) / "encode.json"
+
+
+def load_encode_digest(out_dir: Path, book_sha256: str) -> str | None:
+    """The digest recorded after the last successful m4b encode; ``None``
+    (missing or unreadable) means "unknown settings", i.e. rebuild."""
+    try:
+        data = json.loads(encode_stamp_path(out_dir, book_sha256).read_text(encoding="utf-8"))
+        return str(data["settings_digest"])
+    except OSError, ValueError, KeyError, TypeError:
+        return None
+
+
+def clear_encode_digest(out_dir: Path, book_sha256: str) -> None:
+    """Drop the stamp before an encode starts, so a crash before
+    :func:`store_encode_digest` leaves no stamp (rebuild next run) rather
+    than a stale one that could match an m4b built with other settings."""
+    encode_stamp_path(out_dir, book_sha256).unlink(missing_ok=True)
+
+
+def store_encode_digest(out_dir: Path, book_sha256: str, digest: str) -> None:
+    """Record ``digest`` once the m4b it describes is in place."""
+
+    def write_body(tmp_path: Path) -> None:
+        tmp_path.write_text(json.dumps({"settings_digest": digest}), encoding="utf-8")
+
+    atomic_replace(encode_stamp_path(out_dir, book_sha256), write_body)

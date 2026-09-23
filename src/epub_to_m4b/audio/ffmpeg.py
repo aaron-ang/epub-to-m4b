@@ -6,6 +6,7 @@ actually running ffmpeg, and sidestep shell-quoting entirely.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -17,9 +18,13 @@ from epub_to_m4b.errors import EpubToM4bError
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
-# Mono speech at the standard audiobook bitrate. Higher settings add file
-# size without an audible gain for TTS output.
-AAC_BITRATE = "64k"
+# AAC bitrate for the mono speech track. ffmpeg's native AAC encoder caps
+# its effective rate for 24 kHz mono close to this value, so a higher
+# setting raises only the nominal rate, not the quality.
+AAC_BITRATE = "96k"
+# Integrated loudness the m4b is normalized to (EBU R128 ``loudnorm``,
+# single pass; true peak and loudness range use ffmpeg's defaults).
+LOUDNESS_TARGET_LUFS = -16.0
 
 
 class FFmpegNotFoundError(EpubToM4bError):
@@ -69,7 +74,12 @@ def concat_command(list_path: Path, output_path: Path) -> list[str]:
     ]
 
 
-def encode_m4b_command(audio_path: Path, metadata_path: Path, output_path: Path) -> list[str]:
+def encode_m4b_command(
+    audio_path: Path, metadata_path: Path, output_path: Path, *, sample_rate: int
+) -> list[str]:
+    """Loudness-normalized AAC-in-MP4 encode. ``-ar`` pins the output to the
+    source rate: loudnorm resamples internally and would otherwise hand its
+    own rate on."""
     return [
         FFMPEG,
         "-y",
@@ -83,6 +93,10 @@ def encode_m4b_command(audio_path: Path, metadata_path: Path, output_path: Path)
         "1",
         "-map",
         "0:a",
+        "-af",
+        f"loudnorm=I={LOUDNESS_TARGET_LUFS}",
+        "-ar",
+        str(sample_rate),
         "-c:a",
         "aac",
         "-b:a",
@@ -91,6 +105,13 @@ def encode_m4b_command(audio_path: Path, metadata_path: Path, output_path: Path)
         "mp4",
         str(output_path),
     ]
+
+
+def encode_settings_digest() -> str:
+    """Digest of the encode argv with placeholder paths and sample rate, so
+    any change to codec, bitrate, filter or container rebuilds the m4b."""
+    template = encode_m4b_command(Path("in"), Path("meta"), Path("out"), sample_rate=0)
+    return hashlib.sha256(json.dumps(template).encode("utf-8")).hexdigest()
 
 
 def ffprobe_chapters_command(m4b_path: Path) -> list[str]:

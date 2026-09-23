@@ -205,7 +205,7 @@ command = [
 
 ## Output
 
-- `<out_dir>/<slug>.m4b` — chapter markers, cover, title/author tags
+- `<out_dir>/<slug>.m4b` — AAC at 96 kbps and the source sample rate, loudness-normalized to -16 LUFS (EBU R128 `loudnorm`); chapter markers, cover, title/author tags
 - `<out_dir>/<slug>.vtt` — sentence-level transcript
 
 `<slug>` is derived from the book title.
@@ -216,7 +216,7 @@ command = [
 - Sentence clips are cached as FLAC under `<cache_dir>/clips/<engine-fingerprint>/`, shared across books. Assembled chapters are cached under `<out_dir>/.work/<book-id>/chapters/`.
 - Changing engine, voice, model, or other audio settings stops old clips being reused. Old clips stay on disk.
 - Clips are keyed by the exact sentence text. A text pipeline change (`text/normalize.py`, `text/split.py`, `text/lang/*`) re-synthesizes only sentences whose text it changed.
-- A missing or damaged `.m4b` is rebuilt; an up-to-date one is kept and only the `.vtt` is rewritten.
+- A missing or damaged `.m4b`, or one encoded with different encode settings, is rebuilt; an up-to-date one is kept and only the `.vtt` is rewritten.
 
 ## Troubleshooting
 

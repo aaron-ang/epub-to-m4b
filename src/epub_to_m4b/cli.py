@@ -10,11 +10,14 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
+import soundfile as sf
+
 from epub_to_m4b import __version__
 from epub_to_m4b.audio.ffmpeg import (
     concat_command,
     concat_list,
     encode_m4b_command,
+    encode_settings_digest,
     probe_chapters,
     require_ffmpeg,
     run_command,
@@ -26,7 +29,12 @@ from epub_to_m4b.config import load_config, resolve_cache_dir
 from epub_to_m4b.epub.chapters import DEFAULT_MIN_CHARS, DEFAULT_TOC_DEPTH
 from epub_to_m4b.epub.reader import read_book
 from epub_to_m4b.errors import EpubToM4bError
-from epub_to_m4b.synth.cache import atomic_replace
+from epub_to_m4b.synth.cache import (
+    atomic_replace,
+    clear_encode_digest,
+    load_encode_digest,
+    store_encode_digest,
+)
 from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
 from epub_to_m4b.text.normalize import normalize
 from epub_to_m4b.text.split import split_paragraph
@@ -235,10 +243,16 @@ def _convert(book: Book, args: argparse.Namespace) -> int:
         chapter_files.append(result.flac_path)
         book_cursor += result.duration
 
-    if _m4b_is_current(m4b_path, chapter_files, expected_chapters=len(book.chapters)):
+    digest = encode_settings_digest()
+    settings_match = load_encode_digest(out_dir, book.source_sha256) == digest
+    if settings_match and _m4b_is_current(
+        m4b_path, chapter_files, expected_chapters=len(book.chapters)
+    ):
         print(f"{m4b_path} already up to date, skipping re-encode")
     else:
+        clear_encode_digest(out_dir, book.source_sha256)
         _write_m4b(book, m4b_path, chapter_files, durations)
+        store_encode_digest(out_dir, book.source_sha256, digest)
 
     write_vtt(cues, vtt_path)
     print(f"wrote {m4b_path}")
@@ -250,9 +264,10 @@ def _m4b_is_current(
     m4b_path: Path, chapter_files: Sequence[Path], *, expected_chapters: int
 ) -> bool:
     """Newer than every chapter flac *and* a container ffprobe can read with
-    the right chapter count. mtime alone is not enough: an m4b left behind
-    by an interrupted or failed encode could be newer than everything and
-    still be garbage, and would then never be rebuilt."""
+    the right chapter count (the caller checks the encode-settings stamp
+    first). mtime alone is not enough: an m4b left behind by an interrupted
+    or failed encode could be newer than everything and still be garbage,
+    and would then never be rebuilt."""
     if not m4b_path.is_file():
         return False
     m4b_mtime = m4b_path.stat().st_mtime
@@ -268,9 +283,9 @@ def _m4b_is_current(
 def _write_m4b(
     book: Book, m4b_path: Path, chapter_files: Sequence[Path], durations: Sequence[float]
 ) -> None:
-    """Concat + encode + cover-embed into a temp file next to ``m4b_path``,
-    then ``os.replace`` it into place, so a crash mid-encode never leaves a
-    partial m4b at the real path."""
+    """Concat + loudness-normalized encode + cover-embed into a temp file
+    next to ``m4b_path``, then ``os.replace`` it into place, so a crash
+    mid-encode never leaves a partial m4b at the real path."""
 
     def write_body(tmp_m4b: Path) -> None:
         with tempfile.TemporaryDirectory(prefix="epub-to-m4b-") as tmp_name:
@@ -282,7 +297,10 @@ def _write_m4b(
 
             metadata_path = tmp_dir / "ffmetadata.txt"
             metadata_path.write_text(build_ffmetadata(book, durations), encoding="utf-8")
-            run_command(encode_m4b_command(combined_path, metadata_path, tmp_m4b))
+            sample_rate = sf.info(combined_path).samplerate
+            run_command(
+                encode_m4b_command(combined_path, metadata_path, tmp_m4b, sample_rate=sample_rate)
+            )
         if book.cover and book.cover_mime:
             embed_cover(tmp_m4b, book.cover, book.cover_mime)
 

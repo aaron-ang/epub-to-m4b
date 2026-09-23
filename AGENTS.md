@@ -109,6 +109,7 @@ Engine notes:
 <cache_dir>/clips/<engine_fingerprint[:16]>/<sha256(text)[:32]>.flac
 <out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.flac
 <out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.json
+<out_dir>/.work/<book_sha256[:16]>/encode.json
 ```
 
 - `cache_dir` defaults to `~/.cache/epub-to-m4b`; `E2M_CACHE_DIR` overrides it. Tests must set it to a tmp dir.
@@ -116,7 +117,7 @@ Engine notes:
 - `text` is the exact string passed to `engine.synthesize`. Gaps are added at assembly, never baked into a clip.
 - The chapter manifest records engine fingerprint, sample rate, clip keys, gaps, offsets, duration. Any mismatch re-assembles the chapter.
 - Zero-length or unreadable cache files are deleted and treated as misses.
-- The `.m4b` is re-encoded when any chapter FLAC is newer than it or ffprobe cannot read it with the expected chapter count.
+- The `.m4b` is re-encoded when any chapter FLAC is newer than it, ffprobe cannot read it with the expected chapter count, or `encode.json` is missing or its digest differs from the current encode arguments.
 
 ## Tooling
 
@@ -155,6 +156,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `RUNNING_HEADER_MIN_DOCS` | `epub/chapters.py` | Docs a repeated first line must appear in to count as a running header |
 | `MIN_HEADING_KEY_CHARS` | `epub/chapters.py` | Shortest normalised heading key that can match a TOC label |
 | `AAC_BITRATE` | `audio/ffmpeg.py` | AAC bitrate for the `.m4b` |
+| `LOUDNESS_TARGET_LUFS` | `audio/ffmpeg.py` | Integrated loudness `loudnorm` normalizes the `.m4b` to |
 | `_MIN_CHAPTER_SECONDS` | `audio/assemble.py` | Floor on assembled chapter length |
 | `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause cut / paragraph / heading |
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |

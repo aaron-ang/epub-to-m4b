@@ -17,7 +17,6 @@ import pytest
 from epub_to_m4b.book import AudioClip, Book, Chapter, Paragraph, ParagraphKind
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.orchestrator import synthesize_book
-from epub_to_m4b.text import TEXT_PIPELINE_VERSION
 from epub_to_m4b.tts.base import TTSEngine
 from tests.helpers import make_book
 
@@ -93,7 +92,7 @@ def test_concurrent_engine_overlaps_batches_and_keys_stay_correct(tmp_path: Path
     assert engine.high_water >= 2
     assert len(result.cues) == 9
     for text, _start, _end in result.cues:
-        key = cache.clip_cache_key(TEXT_PIPELINE_VERSION, text)
+        key = cache.clip_cache_key(text)
         clip = cache.load_clip(cache_dir, "overlap", key)
         assert clip is not None
         assert len(clip.samples) == len(text)

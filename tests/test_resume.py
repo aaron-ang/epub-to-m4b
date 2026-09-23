@@ -36,7 +36,6 @@ import soundfile as sf
 
 from epub_to_m4b.audio.ffmpeg import probe_chapters
 from epub_to_m4b.synth.cache import clip_cache_key
-from epub_to_m4b.text import TEXT_PIPELINE_VERSION
 from tests.helpers import xhtml
 
 pytestmark = pytest.mark.skipif(
@@ -86,7 +85,7 @@ sys.exit(cli.main(__ARGV__))
 def _chapter_sentence(chapter_index: int, sentence_index: int) -> str:
     # Long and distinct enough that (a) the splitter's short-fragment merge
     # leaves each one standing alone and (b) no two sentences anywhere in
-    # the book collide on cache key - every one is its own resume unit.
+    # the book are identical - every one is its own resume unit.
     return (
         f"This is the unique sentence number {sentence_index} of chapter "
         f"{chapter_index}, long enough on its own to never be merged with "
@@ -193,7 +192,7 @@ def test_kill_9_mid_render_then_rerun_resumes_without_resynthesizing_cached_clip
     clips_root = cache_dir / "clips"
     env = {**os.environ, "E2M_CACHE_DIR": str(cache_dir)}
     all_texts = _all_sentence_texts()
-    text_for_key = {clip_cache_key(TEXT_PIPELINE_VERSION, text): text for text in all_texts}
+    text_for_key = {clip_cache_key(text): text for text in all_texts}
     assert len(text_for_key) == len(all_texts)  # every sentence is its own resume unit
 
     first_log = tmp_path / "calls-before-kill.log"

@@ -22,8 +22,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class PendingClip:
-    """One not-yet-cached sentence. ``key`` is the clip cache key
-    (``sha256(pipeline_version, text)[:32]``) the result is stored under."""
+    """One not-yet-cached sentence and the key its clip is stored under."""
 
     key: str
     text: str

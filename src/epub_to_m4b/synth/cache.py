@@ -3,14 +3,11 @@
 Two layers, both flat files under ``os.replace``-atomic writes, no database:
 
 ``<cache_dir>/clips/<engine_fingerprint[:16]>/<key>.flac``
-    One sentence's synthesized audio. ``key`` is
-    ``sha256(text_pipeline_version + "\\0" + text)[:32]`` - the engine
-    fingerprint is a *directory* partition, not folded into the hash, so
-    switching engine/voice/model starts a fresh directory while the old one
-    stays untouched and reusable if the run switches back. The key
-    deliberately excludes gap policy: silence is added at assembly time
-    (``audio/assemble.py``), never baked into a clip, so retuning
-    ``GapPolicy`` must never invalidate a cached clip.
+    One sentence's synthesized audio. ``key`` is ``sha256(text)[:32]`` of
+    the exact string handed to ``engine.synthesize``. Each engine
+    fingerprint gets its own directory, so switching engine/voice/model
+    starts fresh while the old clips stay reusable. Silence is added at
+    assembly (``audio/assemble.py``), never baked into a clip.
 
 ``<out_dir>/.work/<book_sha256[:16]>/chapters/<idx>.flac`` (+ sidecar ``.json``)
     One chapter's fully assembled audio, plus a manifest recording what went
@@ -57,15 +54,9 @@ _LANDED_FILE_MODE = 0o666 & ~_read_umask()
 Offsets = tuple[tuple[float, float], ...]
 
 
-def clip_cache_key(pipeline_version: str, text: str) -> str:
-    """``sha256(text_pipeline_version, text)[:32]`` - never includes the engine
-    fingerprint or gap policy; those are a directory partition and an
-    assembly-time concern, respectively (see module docstring)."""
-    digest = hashlib.sha256()
-    digest.update(pipeline_version.encode("utf-8"))
-    digest.update(b"\0")
-    digest.update(text.encode("utf-8"))
-    return digest.hexdigest()[:CLIP_KEY_LENGTH]
+def clip_cache_key(text: str) -> str:
+    """``sha256(text)[:32]`` of the exact string passed to ``engine.synthesize``."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:CLIP_KEY_LENGTH]
 
 
 def _fingerprint_dir(cache_dir: Path, engine_fingerprint: str) -> Path:
@@ -158,8 +149,7 @@ class ChapterManifest:
 
     ``engine_fingerprint`` and ``sample_rate`` are recorded because the
     assembled flac bakes both in: the same sentences rendered by a different
-    voice, or written at a different rate, is a different chapter even
-    though every clip key and gap matches."""
+    voice, or written at a different rate, is a different chapter."""
 
     engine_fingerprint: str
     sample_rate: int

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import os
 import stat
@@ -26,23 +27,26 @@ def _clip(seconds: float = 0.1, value: float = 0.5) -> AudioClip:
 
 
 def test_clip_cache_key_is_stable_for_same_inputs() -> None:
-    a = cache.clip_cache_key("v1", "Hello, world.")
-    b = cache.clip_cache_key("v1", "Hello, world.")
+    a = cache.clip_cache_key("Hello, world.")
+    b = cache.clip_cache_key("Hello, world.")
     assert a == b
     assert len(a) == cache.CLIP_KEY_LENGTH
 
 
 def test_clip_cache_key_changes_with_text() -> None:
-    assert cache.clip_cache_key("v1", "a") != cache.clip_cache_key("v1", "b")
+    assert cache.clip_cache_key("a") != cache.clip_cache_key("b")
 
 
-def test_clip_cache_key_changes_with_pipeline_version() -> None:
-    assert cache.clip_cache_key("v1", "same text") != cache.clip_cache_key("v2", "same text")
+def test_clip_cache_key_is_content_addressed() -> None:
+    # The key is a hash of the exact engine input and nothing else.
+    text = "Caf\u00e9, same text."
+    expected = hashlib.sha256(text.encode("utf-8")).hexdigest()[: cache.CLIP_KEY_LENGTH]
+    assert cache.clip_cache_key(text) == expected
+    assert list(inspect.signature(cache.clip_cache_key).parameters) == ["text"]
 
 
 def test_clip_cache_key_never_depends_on_engine_fingerprint() -> None:
-    # the fingerprint is a directory partition, not folded into the hash -
-    # the key function doesn't even take it as an argument.
+    # the fingerprint selects the directory; the key function doesn't take it.
     assert "engine_fingerprint" not in inspect.signature(cache.clip_cache_key).parameters
 
 
@@ -51,7 +55,7 @@ def test_clip_cache_key_never_depends_on_engine_fingerprint() -> None:
 
 def test_store_then_load_round_trips(tmp_path: Path) -> None:
     clip = _clip()
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
     cache.store_clip(tmp_path, _FP, key, clip)
     loaded = cache.load_clip(tmp_path, _FP, key)
     assert loaded is not None
@@ -64,7 +68,7 @@ def test_load_missing_clip_is_a_miss(tmp_path: Path) -> None:
 
 
 def test_has_clip_tracks_presence_without_decoding(tmp_path: Path) -> None:
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
     assert not cache.has_clip(tmp_path, _FP, key)
     cache.store_clip(tmp_path, _FP, key, _clip())
     assert cache.has_clip(tmp_path, _FP, key)
@@ -73,7 +77,7 @@ def test_has_clip_tracks_presence_without_decoding(tmp_path: Path) -> None:
 def test_store_clip_writes_via_temp_file_then_replace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
     seen_tmp_names: list[str] = []
     real_replace = cache.os.replace
 
@@ -98,7 +102,7 @@ def test_store_clip_writes_via_temp_file_then_replace(
 def test_store_clip_crash_mid_write_leaves_no_partial_file_at_final_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
 
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("simulated crash mid-write")
@@ -120,7 +124,7 @@ _BAD_PAYLOADS = [b"", b"this is not a flac file, just garbage bytes", b"\x00" * 
 def test_bad_clip_file_is_a_miss_for_both_lookups_and_gets_deleted(
     tmp_path: Path, payload: bytes
 ) -> None:
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
     path = cache.clip_path(tmp_path, _FP, key)
     path.parent.mkdir(parents=True)
 
@@ -134,7 +138,7 @@ def test_bad_clip_file_is_a_miss_for_both_lookups_and_gets_deleted(
 
 
 def test_engine_fingerprint_change_uses_a_different_directory(tmp_path: Path) -> None:
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
     cache.store_clip(tmp_path, "engine-a", key, _clip())
     # the old entry is untouched and still loadable under its own fingerprint...
     assert cache.load_clip(tmp_path, "engine-a", key) is not None
@@ -148,7 +152,7 @@ def test_engine_fingerprint_change_uses_a_different_directory(tmp_path: Path) ->
 def test_clip_path_partitions_by_first_16_chars_of_fingerprint(tmp_path: Path) -> None:
     long_fp = "x" * 40
     other_fp = "x" * 16 + "y" * 24  # same first 16 chars, different tail
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
     assert cache.clip_path(tmp_path, long_fp, key) == cache.clip_path(tmp_path, other_fp, key)
 
 
@@ -177,7 +181,7 @@ def test_atomic_replace_lands_file_with_umask_derived_mode(tmp_path: Path) -> No
 
 
 def test_store_clip_lands_flac_with_umask_derived_mode(tmp_path: Path) -> None:
-    key = cache.clip_cache_key("v1", "hello")
+    key = cache.clip_cache_key("hello")
     cache.store_clip(tmp_path, _FP, key, _clip())
     _assert_umask_derived_mode(cache.clip_path(tmp_path, _FP, key))
 
@@ -258,16 +262,13 @@ def test_chapter_not_current_when_clip_keys_changed(tmp_path: Path) -> None:
 
 
 def test_chapter_not_current_when_gap_policy_changed(tmp_path: Path) -> None:
-    # gap policy is not part of the *clip* cache key, but it does change
-    # what the assembled chapter sounds like, so the chapter-level manifest
-    # still needs to catch it.
+    # Gaps change the assembled chapter, so the chapter manifest catches them.
     _store(tmp_path)
     assert _current(tmp_path, gaps=(0.9, 0.9)) is None
 
 
 def test_chapter_not_current_when_engine_fingerprint_changed(tmp_path: Path) -> None:
-    # Same sentences, same gaps, different voice: the assembled audio is a
-    # different chapter even though every clip key matches.
+    # Same sentences, same gaps, different voice: a different chapter.
     _store(tmp_path, fp="engine-a")
     assert _current(tmp_path, fp="engine-a") is not None
     assert _current(tmp_path, fp="engine-b") is None

@@ -27,7 +27,6 @@ from epub_to_m4b.book import AudioClip, Book, Chapter, Paragraph, ParagraphKind,
 from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.batching import PendingClip, make_batches
-from epub_to_m4b.text import TEXT_PIPELINE_VERSION
 from epub_to_m4b.text.normalize import normalize
 from epub_to_m4b.text.split import split_paragraph
 from epub_to_m4b.tts.base import TTSEngine
@@ -46,12 +45,8 @@ _CLAUSE_CHARS = ",;:"
 
 @dataclass(frozen=True, slots=True)
 class GapPolicy:
-    """Seconds of silence inserted after a sentence at assembly time.
-
-    Gaps are applied when a chapter is stitched, so they are not part of
-    the clip cache key; changing them re-assembles chapters without
-    re-synthesising any audio.
-    """
+    """Seconds of silence inserted after a sentence when a chapter is
+    assembled. Changing them re-assembles chapters from cached clips."""
 
     # Breath between sentences ending in . ! ?
     sentence_end: float = 0.25
@@ -176,7 +171,7 @@ def _plan_chapters(
     plans = []
     for idx, chapter in enumerate(book.chapters):
         sentences = chapter_to_sentences(chapter, idx, policy=policy, lang=lang)
-        keys = tuple(cache.clip_cache_key(TEXT_PIPELINE_VERSION, s.text) for s in sentences)
+        keys = tuple(cache.clip_cache_key(s.text) for s in sentences)
         gaps = tuple(s.gap_after for s in sentences)
         manifest = cache.current_chapter_manifest(
             out_dir,
@@ -348,17 +343,16 @@ def synthesize_book(
     log: Log = _no_log,
 ) -> list[ChapterResult]:
     """Render every chapter of ``book``, resuming from ``cache_dir`` (clip
-    cache, keyed by engine fingerprint + text pipeline version + text) and
-    ``out_dir/.work`` (per-chapter flac + manifest) wherever possible.
+    cache) and ``out_dir/.work`` (per-chapter flac + manifest) wherever possible.
 
     Chapters whose manifest still matches (same engine, sample rate,
     sentence set/order and gaps - see ``cache.current_chapter_manifest``)
-    are reused as-is. For the rest: every sentence's cache key is checked
-    for presence first; misses are pooled *across all such chapters* and run
-    through ``synth/batching.py`` so a single ``synthesize()`` call never
-    mixes wildly different sentence lengths. Progress goes to ``log`` one
-    line at a time: a cached/to-synthesize split per chapter up front, then
-    one line per engine batch, then one per assembled chapter.
+    are reused as-is. For the rest: sentences without a cached clip are
+    pooled *across all such chapters* and run through ``synth/batching.py``
+    so a single ``synthesize()`` call never mixes wildly different sentence
+    lengths. Progress goes to ``log`` one line at a time: a
+    cached/to-synthesize split per chapter up front, then one line per
+    engine batch, then one per assembled chapter.
     """
     engine_fingerprint = engine.fingerprint()
     sample_rate = engine.sample_rate

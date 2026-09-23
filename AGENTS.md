@@ -106,16 +106,15 @@ Engine notes:
 ## Cache layout
 
 ```
-<cache_dir>/clips/<engine_fingerprint[:16]>/<sha256(TEXT_PIPELINE_VERSION, text)[:32]>.flac
+<cache_dir>/clips/<engine_fingerprint[:16]>/<sha256(text)[:32]>.flac
 <out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.flac
 <out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.json
 ```
 
 - `cache_dir` defaults to `~/.cache/epub-to-m4b`; `E2M_CACHE_DIR` overrides it. Tests must set it to a tmp dir.
 - Clips are shared across books. The chapter work dir is per book and per `out_dir`.
-- The clip key excludes engine fingerprint (directory partition) and gap policy (applied at assembly).
+- `text` is the exact string passed to `engine.synthesize`. Gaps are added at assembly, never baked into a clip.
 - The chapter manifest records engine fingerprint, sample rate, clip keys, gaps, offsets, duration. Any mismatch re-assembles the chapter.
-- `TEXT_PIPELINE_VERSION` hashes the docstring-stripped AST of `text/normalize.py`, `text/split.py`, `text/lang/*`. Code changes there invalidate every clip; comment/docstring/format edits do not.
 - Zero-length or unreadable cache files are deleted and treated as misses.
 - The `.m4b` is re-encoded when any chapter FLAC is newer than it or ffprobe cannot read it with the expected chapter count.
 

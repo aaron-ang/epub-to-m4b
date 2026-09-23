@@ -214,7 +214,8 @@ command = [
 
 - Rerun the same command to resume an interrupted or partial render.
 - Sentence clips are cached as FLAC under `<cache_dir>/clips/<engine-fingerprint>/`, shared across books. Assembled chapters are cached under `<out_dir>/.work/<book-id>/chapters/`.
-- Changing engine, voice, model, or other audio settings, or editing the text pipeline source (`text/normalize.py`, `text/split.py`, `text/lang/*`), stops old clips being reused. Old clips stay on disk.
+- Changing engine, voice, model, or other audio settings stops old clips being reused. Old clips stay on disk.
+- Clips are keyed by the exact sentence text. A text pipeline change (`text/normalize.py`, `text/split.py`, `text/lang/*`) re-synthesizes only sentences whose text it changed.
 - A missing or damaged `.m4b` is rebuilt; an up-to-date one is kept and only the `.vtt` is rewritten.
 
 ## Troubleshooting
@@ -224,7 +225,7 @@ command = [
 | `error: required on PATH but not found: ffmpeg, ffprobe`                                     | Install ffmpeg; both `ffmpeg` and `ffprobe` must be on `PATH`                                                                |
 | `error: environment variable OPENAI_API_KEY is not set (needed for engine 'openai')`         | `export` the variable named by that engine's `api_key_env`                                                                   |
 | `error: engine 'breeze' selected but no [engine.breeze] table was found - ...`               | Add the `[engine.breeze]` table to the config file, or pass `--config PATH` to a file that has it                            |
-| Resume re-synthesizes every sentence                                                         | Engine settings changed (new fingerprint) or code in `text/normalize.py`, `text/split.py`, `text/lang/*` changed (new `TEXT_PIPELINE_VERSION`) |
+| Resume re-synthesizes every sentence                                                         | Engine settings changed (new fingerprint). A text pipeline change re-synthesizes only sentences whose text changed |
 | `error: server on port 7861 did not become healthy within 180s; see log at ...`               | Read `<cache_dir>/breeze-server-<port>.log`; check `command` (including its model argument) and whether another process holds `port`         |
 | `Breeze server at ...: GET /v1/model answered 404 ...` / `missing or invalid /v1/model field(s)` | Server is not `breeze-tts-server`; stop it and start it with `breeze-tts-server` from the current breeze-tts |
 | `Breeze server busy, waiting for the running inference to finish` (stderr, once per batch)    | Another client holds the server's single inference slot; the run waits (up to 300 s, retrying every 5 s) and continues on its own |

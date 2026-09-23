@@ -89,3 +89,12 @@ def tiny_epub(tmp_path: Path) -> Path:
 def _isolated_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # No test may read or write the real ~/.cache/epub-to-m4b.
     monkeypatch.setenv("E2M_CACHE_DIR", str(tmp_path / "e2m-cache"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No test may read the real ~/.config/epub-to-m4b/config.toml; an empty
+    # file behaves like "no config" and is inherited by spawned CLI runs.
+    empty = tmp_path / "e2m-empty-config.toml"
+    empty.write_text("", encoding="utf-8")
+    monkeypatch.setenv("E2M_CONFIG", str(empty))

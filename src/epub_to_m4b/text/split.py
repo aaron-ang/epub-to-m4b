@@ -20,7 +20,9 @@ _BOUNDARY_CHARS = ".!?;:"
 
 # A closing quote/bracket that belongs with the sentence that just ended,
 # e.g. the `"` in `He said "stop."` - the boundary is after it, not before.
-_CLOSERS = "\"')]\u201d\u2019"
+# Public: the orchestrator's gap rule looks past the same characters to find
+# a sentence's real terminator.
+CLOSERS = "\"')]\u201d\u2019"
 
 # Longest clip the splitter hands to an engine. Long enough to keep a full
 # clause's prosody in one clip; short enough that the Breeze runaway guard
@@ -39,6 +41,16 @@ def _protected_periods(text: str) -> set[int]:
     return protected
 
 
+def _is_initial(text: str, i: int) -> bool:
+    """Whether the '.' at ``i`` follows a lone uppercase letter that is a
+    whole word ("J. K. Rowling", "S. Place"), i.e. a name initial rather than
+    a sentence end. A one-letter sentence-final word ("Plan B. Then") is
+    misread the same way; the ``max_chars`` cut still bounds its length."""
+    if i < 1 or not text[i - 1].isupper():
+        return False
+    return i < 2 or not text[i - 2].isalnum()
+
+
 def _sentence_end_positions(text: str) -> list[int]:
     protected = _protected_periods(text)
     n = len(text)
@@ -47,7 +59,7 @@ def _sentence_end_positions(text: str) -> list[int]:
     while i < n:
         ch = text[i]
         if ch in _BOUNDARY_CHARS:
-            if ch == "." and i in protected:
+            if ch == "." and (i in protected or _is_initial(text, i)):
                 i += 1
                 continue
             prev_digit = i > 0 and text[i - 1].isdigit()
@@ -57,7 +69,7 @@ def _sentence_end_positions(text: str) -> list[int]:
                 i += 1
                 continue
             end = i + 1
-            while end < n and text[end] in _CLOSERS:
+            while end < n and text[end] in CLOSERS:
                 end += 1
             if end >= n or text[end].isspace():
                 positions.append(end)

@@ -28,7 +28,7 @@ from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.batching import PendingClip, make_batches
 from epub_to_m4b.text.normalize import normalize
-from epub_to_m4b.text.split import split_paragraph
+from epub_to_m4b.text.split import CLOSERS, split_paragraph
 from epub_to_m4b.tts.base import TTSEngine
 
 
@@ -37,9 +37,6 @@ class SynthesisError(EpubToM4bError):
     synthesizes it again."""
 
 
-# A closing quote/bracket trailing the real terminator, e.g. the `"` in
-# `He said "stop."` - look past it to find what actually ended the sentence.
-_CLOSERS = "\"')]\u201d\u2019"
 _CLAUSE_CHARS = ",;:"
 
 
@@ -88,7 +85,9 @@ def sentence_gap(
 
 def _terminal_char(text: str) -> str:
     stripped = text.rstrip()
-    while stripped and stripped[-1] in _CLOSERS:
+    # Look past a trailing closing quote/bracket to find what actually ended
+    # the sentence, e.g. the `.` in `He said "stop."`.
+    while stripped and stripped[-1] in CLOSERS:
         stripped = stripped[:-1]
     return stripped[-1] if stripped else ""
 

@@ -91,3 +91,55 @@ def test_merge_may_exceed_max_chars_up_to_the_1_5x_ceiling() -> None:
     pieces = split_paragraph(_para(text), max_chars=60)
     assert all(len(p) <= 90 for p in pieces)
     assert any(len(p) > 60 for p in pieces)
+
+
+# ---------------------------------------------------------------------------
+# single-letter initials are not sentence ends
+# ---------------------------------------------------------------------------
+# Each text puts 50+ chars before the initial (max_chars=100 -> merge
+# threshold 50), so a wrong split could not be hidden by _merge_short.
+
+
+def test_name_initials_do_not_split() -> None:
+    text = "He finally met J. K. Rowling at the station yesterday afternoon."
+    assert split_paragraph(_para(text), max_chars=100) == [text]
+
+
+def test_initial_in_place_name_does_not_split() -> None:
+    text = "After many years of wandering around, they settled in S. Place for good."
+    assert split_paragraph(_para(text), max_chars=100) == [text]
+
+
+def test_initial_after_punctuation_does_not_split() -> None:
+    text = 'The letter that arrived this morning was signed only "(A. Smith)" and nothing more.'
+    assert split_paragraph(_para(text), max_chars=100) == [text]
+
+
+def test_sentence_end_after_ordinary_word_still_splits() -> None:
+    first = "The first sentence is long enough here."
+    second = "The second one is long enough too."
+    assert split_paragraph(_para(f"{first} {second}"), max_chars=40) == [first, second]
+
+
+def test_sentence_end_after_acronym_still_splits() -> None:
+    # "USA." ends in an uppercase letter, but not a one-letter word.
+    first = "After all that, we flew back to the USA."
+    second = "Then we finally went home again."
+    assert split_paragraph(_para(f"{first} {second}"), max_chars=40) == [first, second]
+
+
+def test_sentence_end_after_lowercase_single_letter_still_splits() -> None:
+    first = "At the very end he wrote the letter x."
+    second = "Then he put the pen down for good."
+    assert split_paragraph(_para(f"{first} {second}"), max_chars=40) == [first, second]
+
+
+def test_one_letter_sentence_final_word_is_a_known_non_split() -> None:
+    # Accepted trade-off: "Plan B." reads like an initial.
+    text = "When every other option had failed, we fell back on Plan B. Then it went fine."
+    assert split_paragraph(_para(text), max_chars=100) == [text]
+
+
+def test_abbreviation_before_initial_does_not_split() -> None:
+    text = "Late that evening at the hospital we were introduced to Dr. J. Smith and his wife."
+    assert split_paragraph(_para(text), max_chars=100) == [text]

@@ -79,7 +79,7 @@ Chapter markers in the rendered file (`ffprobe -show_chapters out/outliers-the-s
 | `openai`     | Any OpenAI-compatible `/v1/audio/speech` endpoint                                    | API key in the env var named by `api_key_env`                 | Per character, provider pricing | `base_url`, `model`, `voice` required   |
 | `deepgram`   | Cloud                                                                                | API key in the env var named by `api_key_env`                 | Per character, provider pricing | Config table optional                   |
 | `elevenlabs` | Cloud                                                                                | API key in the env var named by `api_key_env`                 | Per character, provider pricing | `voice_id` required                     |
-| `breeze`     | Self-hosted GPU sidecar (separate `breeze-tts` server, spawned or adopted on `port`) | Model weights + `breeze-infer-api` server `command` in config | Free                            | Batched (`batch_size`); resume-friendly |
+| `breeze`     | Self-hosted GPU sidecar (separate `breeze-tts` server, spawned or adopted on `port`) | Model weights + `breeze-tts-server` `command` in config     | Free                            | Batched (`batch_size`); resume-friendly |
 | `silence`    | Local                                                                                | Nothing                                                       | Free                            | Pipeline dry runs; silent clips         |
 | `tone`       | Local                                                                                | Nothing                                                       | Free                            | Pipeline dry runs; sine-tone clips      |
 
@@ -175,7 +175,6 @@ Only `[engine.<name>]` tables are read. Unknown keys, missing required keys, and
 
 | Key           | Type     | Default                                                                 | Required |
 |---------------|----------|-------------------------------------------------------------------------|----------|
-| `weights_dir` | string   |                                                                         | ✓        |
 | `command`     | string[] |                                                                         | ✓        |
 | `port`        | int      | `7861`                                                                  |          |
 | `batch_size`  | int      | `64`                                                                    |          |
@@ -183,7 +182,7 @@ Only `[engine.<name>]` tables are read. Unknown keys, missing required keys, and
 | `cfg_scale`   | float    | `4.0`                                                                   |          |
 | `seed`        | int      | `42`                                                                    |          |
 
-`command` is the argv that starts the server; `weights_dir` and `--host`/`--port` are appended. A server already listening on `port` is adopted instead of spawned.
+`command` is the argv that starts `breeze-tts-server` (from breeze-tts) and ends with the model: a local dir or a Hugging Face repo id (plus `--revision`), resolved by breeze-tts. `--host`/`--port` are appended. A server already listening on `port` is adopted instead of spawned. `batch_size` is clamped to the server's reported limit.
 
 ```toml
 [engine.openai]
@@ -198,8 +197,10 @@ model = "aura-2-thalia-en"
 voice_id = "..."
 
 [engine.breeze]
-weights_dir = "/path/to/breeze-tts-2"
-command = ["uv", "run", "--directory", "/path/to/breeze-tts", "breeze-infer-api"]
+command = [
+  "uv", "run", "--directory", "/path/to/breeze-tts", "breeze-tts-server",
+  "BreezeBlue/Breeze-TTS-2",
+]
 ```
 
 ## Output
@@ -224,7 +225,8 @@ command = ["uv", "run", "--directory", "/path/to/breeze-tts", "breeze-infer-api"
 | `error: environment variable OPENAI_API_KEY is not set (needed for engine 'openai')`         | `export` the variable named by that engine's `api_key_env`                                                                   |
 | `error: engine 'breeze' selected but no [engine.breeze] table was found - ...`               | Add the `[engine.breeze]` table to the config file, or pass `--config PATH` to a file that has it                            |
 | Resume re-synthesizes every sentence                                                         | Engine settings changed (new fingerprint) or code in `text/normalize.py`, `text/split.py`, `text/lang/*` changed (new `TEXT_PIPELINE_VERSION`) |
-| `error: server on port 7861 did not become healthy within 180s; see log at ...`               | Read `<cache_dir>/breeze-server-<port>.log`; check `command`, `weights_dir`, and whether another process holds `port`         |
+| `error: server on port 7861 did not become healthy within 180s; see log at ...`               | Read `<cache_dir>/breeze-server-<port>.log`; check `command` (including its model argument) and whether another process holds `port`         |
+| `Breeze server at ...: GET /v1/model answered 404 ...` / `missing or invalid /v1/model field(s)` | Server is not `breeze-tts-server`; stop it and start it with `breeze-tts-server` from the current breeze-tts |
 | `Breeze server busy, waiting for the running inference to finish` (stderr, once per batch)    | Another client holds the server's single inference slot; the run waits (up to 300 s, retrying every 5 s) and continues on its own |
 
 ## Development

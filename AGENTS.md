@@ -76,7 +76,7 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 |--------------|-----------------------|---------------|-------------------|
 | `silence`    | none                  | 1             | 1                 |
 | `tone`       | none                  | 1             | 1                 |
-| `breeze`     | required              | `batch_size`  | 1                 |
+| `breeze`     | required              | `min(batch_size, max_batch_texts)` | 1            |
 | `openai`     | required              | 1             | 4                 |
 | `elevenlabs` | required              | 1             | 2                 |
 | `deepgram`   | optional (all defaults) | 1           | 4                 |
@@ -91,7 +91,7 @@ Engine notes:
 
 | Engine                             | Notes                                                                                                                                          |
 |------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `breeze`                           | Reference voice files under `cache_dir/breeze/`; wav hash in fingerprint; runaway guard from `tts/guard.py`; 409 busy-wait via `SidecarPolicy` |
+| `breeze`                           | Model is the last `command` arg (local dir or HF repo id, resolved by breeze-tts); server started with `breeze-tts-server`; `GET /v1/model` reports `frame_rate`, `model_digest`, `max_new_tokens`, `max_batch_texts` (`ServerInfo`; 404 or bad field = wrong server); fingerprint uses `model_digest` + reference wav hash; token cap from `frame_rate`, clamped to `max_new_tokens`; runaway guard from `tts/guard.py` via `RunawayPolicy`; 409 busy-wait via `SidecarPolicy` |
 | `openai`, `elevenlabs`, `deepgram` | `tts/http.py` retry                                                                                                                            |
 | `silence`, `tone`                  | none                                                                                                                                           |
 
@@ -159,14 +159,10 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `_MIN_CHAPTER_SECONDS` | `audio/assemble.py` | Floor on assembled chapter length |
 | `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause cut / paragraph / heading |
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |
-| `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size |
+| `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size (clamped to server `max_batch_texts`) |
 | `_SIDECAR_ENV` | `tts/breeze.py` | Env vars the Breeze server child gets when spawned (`TRITON_PTXAS_PATH`) |
-| `CLIP_BASE_SECONDS`, `CLIP_SECONDS_PER_CHAR` | `tts/guard.py` | Duration budget that triggers a reseed retry |
-| `CUT_SECONDS_PER_CHAR` | `tts/guard.py` | Duration budget beyond which a clip is truncated |
-| `TOKENS_PER_SECOND` | `tts/guard.py` | Codec audio tokens per second, for the server-side token cap |
-| `TOKEN_CAP_SLACK` | `tts/guard.py` | Multiplier loosening the server-side token cap |
+| `RunawayPolicy` defaults | `tts/guard.py` | Retry limit (base + per-char seconds), token cap slack over it (also the cut limit), reseed attempts |
 | `FADE_SECONDS` | `tts/guard.py` | Fade-out applied to a truncated clip |
-| `RUNAWAY_RETRIES` | `tts/guard.py` | Reseed attempts before cutting |
 | `SidecarPolicy` defaults | `tts/sidecar.py` | Health/poll/startup/terminate timeouts, single-request and batch timeouts, busy status + total busy wait + retry spacing |
 
 ## Reference material

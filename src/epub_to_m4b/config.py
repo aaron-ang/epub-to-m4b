@@ -47,7 +47,7 @@ DEFAULT_CONFIG_PATH = Path("~/.config/epub-to-m4b/config.toml").expanduser()
 # here (cache_dir / "breeze").
 DEFAULT_CACHE_DIR = Path("~/.cache/epub-to-m4b").expanduser()
 
-_BREEZE_REQUIRED = ("weights_dir", "command")
+_BREEZE_REQUIRED = ("command",)
 _OPENAI_REQUIRED = ("base_url", "model", "voice")
 _ELEVENLABS_REQUIRED = ("voice_id",)
 

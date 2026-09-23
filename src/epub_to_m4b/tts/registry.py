@@ -28,7 +28,7 @@ def _breeze_factory(config: AppConfig) -> TTSEngine:
         raise ConfigError(
             "engine 'breeze' selected but no [engine.breeze] table was found - "
             "pass --config pointing at a TOML file with a fully configured "
-            "[engine.breeze] table (weights_dir, command, ...) to use it"
+            "[engine.breeze] table (command, ...) to use it"
         )
     return BreezeEngine(config.breeze)
 

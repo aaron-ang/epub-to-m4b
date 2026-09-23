@@ -1,7 +1,8 @@
 """BreezeEngine: self-hosted Breeze-TTS sidecar, batched over its HTTP API.
 
-Contract of the sidecar (see ``breeze_infer/api.py`` in the ``breeze-tts``
-project): ``GET /health`` for readiness/sample rate, ``POST
+Contract of the sidecar (upstream ``breeze_infer/api.py`` in the
+``breeze-tts`` project, plus ``GET /v1/model`` for model facts added by its
+``breeze-tts-server`` wrapper): ``GET /health`` for readiness/sample rate, ``POST
 /v1/audio/speech`` for a single non-batched clip (used here only to
 bootstrap the one-time reference voice), and ``POST /v1/audio/speech/batch``
 for everything else - texts as a JSON-encoded array, response body the
@@ -17,7 +18,7 @@ import json
 import logging
 import os
 import wave
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -27,7 +28,8 @@ import numpy as np
 
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
-from epub_to_m4b.tts.base import TTSEngine, pcm16_to_float32
+from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest, pcm16_to_float32
+from epub_to_m4b.tts.guard import DEFAULT_RUNAWAY_POLICY, RunawayPolicy
 from epub_to_m4b.tts.http import TTSError
 from epub_to_m4b.tts.sidecar import (
     DEFAULT_SIDECAR_POLICY,
@@ -50,7 +52,8 @@ _SIDECAR_ENV = {"TRITON_PTXAS_PATH": "/usr/local/cuda/bin/ptxas"}
 
 @dataclass(frozen=True)
 class BreezeConfig:
-    weights_dir: Path
+    # Starts the server; ends with the model (a local dir or an HF repo id,
+    # resolved by breeze-tts). The sidecar appends --host/--port.
     command: Sequence[str]
     cache_dir: Path
     # Any free unprivileged port; must match a server you want adopted.
@@ -59,11 +62,72 @@ class BreezeConfig:
     # Classifier-free-guidance strength the model card recommends; higher
     # follows the instruction harder at the cost of naturalness.
     cfg_scale: float = 4.0
-    # Fixed so re-synthesis is reproducible and cache keys stay valid.
+    # Fixed so re-synthesis is reproducible.
     seed: int = 42
-    # Texts per POST. Bounded by server VRAM; larger batches stop helping
-    # once the GPU is saturated.
+    # Texts per POST, clamped to the server's max_batch_texts. Bounded by
+    # server VRAM; larger batches stop helping once the GPU is saturated.
     batch_size: int = 64
+
+
+@dataclass(frozen=True)
+class ServerInfo:
+    """Model facts the Breeze server reports on ``GET /v1/model``.
+
+    The server owns the model, so it is the source of truth for the codec
+    frame rate (the unit ``max_new_tokens`` counts in), the model identity
+    that partitions the clip cache, and its own request limits.
+    """
+
+    frame_rate: float
+    model_digest: str
+    max_new_tokens: int
+    max_batch_texts: int
+
+    @classmethod
+    def from_model_body(cls, body: Mapping[str, object], base_url: str) -> ServerInfo:
+        """Parse a ``/v1/model`` body; a missing or invalid field is a wrong server."""
+        frame_rate = _positive_number(body.get("frame_rate"))
+        model_digest = _nonempty_str(body.get("model_digest"))
+        max_new_tokens = _positive_int(body.get("max_new_tokens"))
+        max_batch_texts = _positive_int(body.get("max_batch_texts"))
+        if (
+            frame_rate is None
+            or model_digest is None
+            or max_new_tokens is None
+            or max_batch_texts is None
+        ):
+            parsed = {
+                "frame_rate": frame_rate,
+                "model_digest": model_digest,
+                "max_new_tokens": max_new_tokens,
+                "max_batch_texts": max_batch_texts,
+            }
+            bad = ", ".join(f"{k}={body.get(k)!r}" for k, v in parsed.items() if v is None)
+            raise _wrong_server(base_url, f"missing or invalid /v1/model field(s): {bad}")
+        return cls(frame_rate, model_digest, max_new_tokens, max_batch_texts)
+
+
+def _wrong_server(base_url: str, problem: str) -> TTSError:
+    return TTSError(
+        f"Breeze server at {base_url}: {problem}. Stop it and start it with "
+        "`breeze-tts-server` from the current breeze-tts"
+    )
+
+
+def _positive_number(value: object) -> float | None:
+    if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return None
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _write_wav(path: Path, pcm_bytes: bytes, sample_rate: int) -> None:
@@ -93,29 +157,25 @@ class BreezeEngine(TTSEngine):
     config: BreezeConfig
     transport: httpx.BaseTransport | None = None
     policy: SidecarPolicy = DEFAULT_SIDECAR_POLICY
+    runaway: RunawayPolicy = DEFAULT_RUNAWAY_POLICY
 
     sample_rate: int = field(init=False)
+    server: ServerInfo = field(init=False)
+    _cap_clamp_logged: bool = field(default=False, init=False, repr=False)
     _sidecar: SidecarHandle = field(init=False, repr=False)
     _client: httpx.Client = field(init=False, repr=False)
     _reference_wav: Path = field(init=False, repr=False)
     _reference_text: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # The orchestrator sizes each synthesize() call by max_batch; leaving
-        # the ABC default of 1 would feed the GPU one sentence per request.
-        self.max_batch = self.config.batch_size
         client_kwargs: dict[str, httpx.BaseTransport] = {}
         if self.transport is not None:
             client_kwargs["transport"] = self.transport
         self._client = httpx.Client(**client_kwargs)  # type: ignore[arg-type]
 
         log_path = self.config.cache_dir / f"breeze-server-{self.config.port}.log"
-        # The sidecar's spawn command is engine-agnostic (see tts/sidecar.py) -
-        # it only appends --host/--port. Breeze's server also takes the
-        # weights directory as a required positional arg, so it goes on the
-        # end of the configured command here, not inside sidecar.py.
         self._sidecar = start_or_adopt(
-            [*self.config.command, str(self.config.weights_dir)],
+            self.config.command,
             self.config.port,
             log_path=log_path,
             policy=self.policy,
@@ -125,11 +185,28 @@ class BreezeEngine(TTSEngine):
         )
         self.sample_rate = self._sidecar.sample_rate
         try:
+            self.server = self._fetch_server_info()
+            # The orchestrator sizes each synthesize() call by max_batch; leaving
+            # the ABC default of 1 would feed the GPU one sentence per request.
+            self.max_batch = min(self.config.batch_size, self.server.max_batch_texts)
             self._reference_wav, self._reference_text = self._load_or_create_reference_voice()
         except BaseException:
             self._client.close()
             self._sidecar.close()
             raise
+
+    def _fetch_server_info(self) -> ServerInfo:
+        base_url = self._sidecar.base_url
+        response = self._client.get(f"{base_url}/v1/model", timeout=self.policy.request_timeout)
+        if response.status_code != httpx.codes.OK:
+            raise _wrong_server(base_url, f"GET /v1/model answered {response.status_code}")
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise _wrong_server(base_url, "GET /v1/model did not return a JSON object")
+        return ServerInfo.from_model_body(body, base_url)
 
     def _load_or_create_reference_voice(self) -> tuple[Path, str]:
         ref_dir = self.config.cache_dir / "breeze"
@@ -156,15 +233,17 @@ class BreezeEngine(TTSEngine):
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
         all_texts = list(texts)
         clips: list[AudioClip] = []
-        for start in range(0, len(all_texts), self.config.batch_size):
-            chunk = all_texts[start : start + self.config.batch_size]
+        for start in range(0, len(all_texts), self.max_batch):
+            chunk = all_texts[start : start + self.max_batch]
             clips.extend(self._synthesize_chunk(chunk, seed=self.config.seed))
 
         def reseed(texts: Sequence[str], attempt: int) -> list[AudioClip]:
             # The runaway subset never exceeds one incoming batch, so it fits one POST.
             return self._synthesize_chunk(list(texts), seed=self.config.seed + attempt)
 
-        guarded, notes = guard.apply_guard(clips, all_texts, reseed)
+        guarded, notes = guard.apply_guard(
+            clips, all_texts, reseed, self.runaway, max_cap_seconds=self._server_cap_seconds()
+        )
         for note in notes:
             logger.info("Breeze %s", note)
         return guarded
@@ -176,10 +255,26 @@ class BreezeEngine(TTSEngine):
             "cfg_scale": self.config.cfg_scale,
             "ref_text": self._reference_text,
             "seed": seed,
-            "max_new_tokens": guard.max_new_tokens(chunk),
+            "max_new_tokens": self._max_new_tokens(chunk),
         }
         response = self._post_batch_with_retry(data)
         return self._split_segments(response, expected_count=len(chunk))
+
+    def _server_cap_seconds(self) -> float:
+        return self.server.max_new_tokens / self.server.frame_rate
+
+    def _max_new_tokens(self, chunk: Sequence[str]) -> int:
+        tokens = guard.max_new_tokens(chunk, self.runaway, self.server.frame_rate)
+        if tokens <= self.server.max_new_tokens:
+            return tokens
+        if not self._cap_clamp_logged:
+            logger.debug(
+                "Breeze token cap %d clamped to the server's max_new_tokens %d",
+                tokens,
+                self.server.max_new_tokens,
+            )
+            self._cap_clamp_logged = True
+        return self.server.max_new_tokens
 
     def _post_batch_with_retry(self, data: dict[str, object]) -> httpx.Response:
         def send() -> httpx.Response:
@@ -228,19 +323,14 @@ class BreezeEngine(TTSEngine):
         return clips
 
     def fingerprint(self) -> str:
-        digest = hashlib.sha256()
-        parts = (
+        return fingerprint_digest(
             self.name,
-            str(self.config.weights_dir),
+            self.server.model_digest,
             self.config.instruction,
             repr(self.config.cfg_scale),
             repr(self.config.seed),
             _sha256_file(self._reference_wav),
         )
-        for part in parts:
-            digest.update(part.encode("utf-8"))
-            digest.update(b"\0")
-        return digest.hexdigest()
 
     def close(self) -> None:
         self._sidecar.close()

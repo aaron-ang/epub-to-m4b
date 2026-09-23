@@ -144,8 +144,8 @@ def start_or_adopt(
        polling the same way we would after our own spawn.
     3. A real 200 response - adopt immediately, no polling needed.
 
-    ``command`` already includes any engine-specific args (e.g. the weights
-    directory); this function appends ``--host 127.0.0.1 --port {port}``.
+    ``command`` already includes any engine-specific args (e.g. the model
+    path); this function appends ``--host 127.0.0.1 --port {port}``.
     ``env`` is layered over the current process environment for the spawned
     child (caller's entries win); engine-specific variables belong to the
     caller, not here. Blocks until the server answers healthy or

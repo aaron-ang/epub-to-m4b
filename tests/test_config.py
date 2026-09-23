@@ -47,16 +47,14 @@ def test_load_config_no_engine_table_yields_no_breeze(tmp_path: Path) -> None:
 def test_load_config_merges_breeze_table_over_defaults(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "config.toml",
-        f"""
+        """
         [engine.breeze]
-        weights_dir = "{tmp_path / "weights"}"
         command = ["uv", "run", "breeze-infer-api"]
         port = 9999
         """,
     )
     config = load_config(path, cache_dir=tmp_path / "cache")
     assert config.breeze is not None
-    assert config.breeze.weights_dir == tmp_path / "weights"
     assert config.breeze.command == ["uv", "run", "breeze-infer-api"]
     assert config.breeze.port == 9999
     # Not present in TOML - falls back to BreezeConfig's own field defaults.
@@ -69,9 +67,9 @@ def test_load_config_merges_breeze_table_over_defaults(tmp_path: Path) -> None:
 def test_load_config_breeze_table_missing_command_raises(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "config.toml",
-        f"""
+        """
         [engine.breeze]
-        weights_dir = "{tmp_path / "weights"}"
+        port = 9999
         """,
     )
     with pytest.raises(ConfigError, match="command"):
@@ -88,7 +86,6 @@ def test_load_config_unknown_breeze_key_raises(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
         [engine.breeze]
-        weights_dir = "/weights"
         command = ["cmd"]
         bogus = 1
         """,
@@ -196,7 +193,6 @@ def _breeze_toml(tmp_path: Path, extra_line: str) -> Path:
         tmp_path / "config.toml",
         f"""
         [engine.breeze]
-        weights_dir = "{tmp_path / "weights"}"
         command = ["uv", "run", "breeze-infer-api"]
         {extra_line}
         """,
@@ -228,9 +224,8 @@ def test_load_config_breeze_cfg_scale_bool_raises(tmp_path: Path) -> None:
 def test_load_config_breeze_command_non_string_item_raises(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "config.toml",
-        f"""
+        """
         [engine.breeze]
-        weights_dir = "{tmp_path / "weights"}"
         command = ["uv", 3]
         """,
     )

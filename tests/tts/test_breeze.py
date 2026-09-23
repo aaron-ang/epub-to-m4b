@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import email
 import json
+import logging
+import math
 import subprocess
+from collections.abc import Callable
 from email.message import Message
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -17,6 +20,7 @@ from epub_to_m4b.tts.http import TTSError
 from epub_to_m4b.tts.sidecar import SidecarPolicy
 
 _SAMPLE_RATE = 24000
+_FRAME_RATE = 12.5
 
 
 def _pcm_bytes(seconds: float, sample_rate: int = _SAMPLE_RATE, amplitude: int = 1000) -> bytes:
@@ -45,14 +49,44 @@ def _parse_multipart(request: httpx.Request) -> dict[str, str]:
     return fields
 
 
+_MODEL_DIGEST = "ab" * 32
+
+
+def _model_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "frame_rate": _FRAME_RATE,
+        "model_digest": _MODEL_DIGEST,
+        "max_new_tokens": 1500,
+        "max_batch_texts": 128,
+    }
+    body.update(overrides)
+    return body
+
+
+def _mock_transport(
+    handler: Callable[[httpx.Request], httpx.Response], **model: object
+) -> httpx.MockTransport:
+    """``handler`` behind a ``breeze-tts-server`` that answers ``/v1/model``."""
+
+    def with_model(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/model":
+            return httpx.Response(200, json=_model_body(**model))
+        return handler(request)
+
+    return httpx.MockTransport(with_model)
+
+
 def _health_response(sample_rate: int = _SAMPLE_RATE) -> httpx.Response:
     return httpx.Response(200, json={"status": "ok", "sample_rate": sample_rate})
 
 
+def _retry_limit(text: str) -> float:
+    return guard.retry_limit_seconds(text, guard.DEFAULT_RUNAWAY_POLICY)
+
+
 def _config(tmp_path: Path, **overrides: object) -> BreezeConfig:
     defaults: dict[str, object] = {
-        "weights_dir": tmp_path / "weights",
-        "command": ["fake-breeze-command"],
+        "command": ["fake-breeze-command", "some/model-repo"],
         "cache_dir": tmp_path / "cache",
         "port": 7861,
     }
@@ -76,7 +110,7 @@ def test_reference_voice_created_on_first_use_and_reused_on_second(tmp_path: Pat
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
 
     engine1 = BreezeEngine(config, transport=transport)
@@ -115,7 +149,9 @@ def test_batch_splitting_respects_batch_size(tmp_path: Path) -> None:
                 fields["ref_text"] == "This is a clear, steady voice reading aloud for narration."
             )
             assert int(fields["seed"]) == config.seed
-            assert int(fields["max_new_tokens"]) > 0
+            assert int(fields["max_new_tokens"]) == guard.max_new_tokens(
+                texts, guard.DEFAULT_RUNAWAY_POLICY, _FRAME_RATE
+            )
             segments = [_pcm_bytes(0.1) for _ in texts]
             return httpx.Response(
                 200,
@@ -127,7 +163,7 @@ def test_batch_splitting_respects_batch_size(tmp_path: Path) -> None:
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path, batch_size=3)
     engine = BreezeEngine(config, transport=transport)
     # The orchestrator only ever passes max_batch texts per call, so a stale
@@ -172,7 +208,7 @@ def test_409_triggers_wait_and_retry(tmp_path: Path) -> None:
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(
         config, transport=transport, policy=SidecarPolicy(busy_timeout=0.005, busy_wait=0.001)
@@ -199,7 +235,7 @@ def test_409_exhausts_retries_and_raises(tmp_path: Path) -> None:
             return httpx.Response(409, json={"detail": "An inference request is already running."})
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(
         config, transport=transport, policy=SidecarPolicy(busy_timeout=0.002, busy_wait=0.001)
@@ -234,7 +270,7 @@ def test_segment_bytes_header_parsing_splits_pcm_correctly(tmp_path: Path) -> No
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(config, transport=transport)
 
@@ -275,7 +311,7 @@ def test_segment_count_mismatch_raises_clear_error(tmp_path: Path) -> None:
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(config, transport=transport)
 
@@ -286,7 +322,7 @@ def test_segment_count_mismatch_raises_clear_error(tmp_path: Path) -> None:
 
 def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
     text = "a runaway sentence"
-    retry_limit = guard.retry_limit_seconds(text)
+    retry_limit = _retry_limit(text)
     runaway_seconds = retry_limit + 5.0
     recovered_seconds = retry_limit - 0.5
     batch_calls: list[tuple[list[str], int]] = []
@@ -318,7 +354,7 @@ def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(config, transport=transport)
 
@@ -331,7 +367,7 @@ def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
 
 def test_several_runaways_reseed_as_one_post_per_attempt(tmp_path: Path) -> None:
     ok, run_a, run_b = "fine", "runaway alpha", "runaway beta"
-    limit = min(guard.retry_limit_seconds(run_a), guard.retry_limit_seconds(run_b))
+    limit = min(_retry_limit(run_a), _retry_limit(run_b))
     batch_calls: list[tuple[list[str], int]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -362,7 +398,7 @@ def test_several_runaways_reseed_as_one_post_per_attempt(tmp_path: Path) -> None
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(config, transport=transport)
 
@@ -375,13 +411,13 @@ def test_several_runaways_reseed_as_one_post_per_attempt(tmp_path: Path) -> None
         ([run_a, run_b], config.seed + 1),
     ]
     assert clips[0].seconds <= 0.11
-    assert clips[1].seconds <= guard.retry_limit_seconds(run_a)
-    assert clips[2].seconds <= guard.retry_limit_seconds(run_b)
+    assert clips[1].seconds <= _retry_limit(run_a)
+    assert clips[2].seconds <= _retry_limit(run_b)
 
 
 def test_runaways_still_over_limit_get_second_attempt_post(tmp_path: Path) -> None:
     run_a, run_b = "runaway alpha", "runaway beta"
-    limit = min(guard.retry_limit_seconds(run_a), guard.retry_limit_seconds(run_b))
+    limit = min(_retry_limit(run_a), _retry_limit(run_b))
     batch_calls: list[tuple[list[str], int]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -415,7 +451,7 @@ def test_runaways_still_over_limit_get_second_attempt_post(tmp_path: Path) -> No
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(config, transport=transport)
 
@@ -427,10 +463,7 @@ def test_runaways_still_over_limit_get_second_attempt_post(tmp_path: Path) -> No
         ([run_a, run_b], config.seed + 1),
         ([run_b], config.seed + 2),
     ]
-    assert all(
-        c.seconds <= guard.retry_limit_seconds(t)
-        for c, t in zip(clips, [run_a, run_b], strict=True)
-    )
+    assert all(c.seconds <= _retry_limit(t) for c, t in zip(clips, [run_a, run_b], strict=True))
 
 
 def test_fingerprint_is_stable_and_changes_with_reference_voice(tmp_path: Path) -> None:
@@ -449,7 +482,7 @@ def test_fingerprint_is_stable_and_changes_with_reference_voice(tmp_path: Path) 
         return handler
 
     config_a = _config(tmp_path / "a")
-    transport_a = httpx.MockTransport(make_handler(_pcm_bytes(1.0)))
+    transport_a = _mock_transport(make_handler(_pcm_bytes(1.0)))
     engine_a1 = BreezeEngine(config_a, transport=transport_a)
     fp_a1 = engine_a1.fingerprint()
     engine_a1.close()
@@ -460,7 +493,7 @@ def test_fingerprint_is_stable_and_changes_with_reference_voice(tmp_path: Path) 
     assert fp_a1 == fp_a2
 
     config_b = _config(tmp_path / "b")
-    transport_b = httpx.MockTransport(make_handler(_pcm_bytes(2.0)))  # different reference audio
+    transport_b = _mock_transport(make_handler(_pcm_bytes(2.0)))  # different reference audio
     engine_b = BreezeEngine(config_b, transport=transport_b)
     fp_b = engine_b.fingerprint()
     engine_b.close()
@@ -482,7 +515,7 @@ def test_close_stops_owned_sidecar_but_not_adopted(tmp_path: Path) -> None:
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    transport = httpx.MockTransport(handler)
+    transport = _mock_transport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(config, transport=transport)
     assert engine._sidecar.owned is False
@@ -507,7 +540,7 @@ def _spawning_transport() -> httpx.MockTransport:
             )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    return httpx.MockTransport(handler)
+    return _mock_transport(handler)
 
 
 def test_spawn_sets_default_triton_ptxas_path_when_unset(
@@ -540,3 +573,177 @@ def test_spawn_respects_already_set_triton_ptxas_path(
 
     env = popen.call_args.kwargs["env"]
     assert env["TRITON_PTXAS_PATH"] == "/custom/ptxas"
+
+
+def _ready_transport(
+    batch_fields: list[dict[str, str]] | None = None, **model: object
+) -> httpx.MockTransport:
+    """An adopted, healthy sidecar that answers every batch text with a short clip."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(
+                200,
+                content=_pcm_bytes(1.0),
+                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
+            )
+        if request.url.path == "/v1/audio/speech/batch":
+            fields = _parse_multipart(request)
+            if batch_fields is not None:
+                batch_fields.append(fields)
+            segments = [_pcm_bytes(0.1) for _ in json.loads(fields["texts"])]
+            return httpx.Response(
+                200,
+                content=b"".join(segments),
+                headers={
+                    "X-Segment-Bytes": ",".join(str(len(s)) for s in segments),
+                    "X-Sample-Rate": str(_SAMPLE_RATE),
+                },
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    return _mock_transport(handler, **model)
+
+
+def test_token_cap_uses_frame_rate_from_server(tmp_path: Path) -> None:
+    policy = guard.RunawayPolicy(cap_slack=2.0)
+    batch_fields: list[dict[str, str]] = []
+    transport = _ready_transport(batch_fields, frame_rate=25.0)
+    engine = BreezeEngine(_config(tmp_path), transport=transport, runaway=policy)
+    assert engine.server.frame_rate == 25.0
+    engine.synthesize(["one sentence"])
+    engine.close()
+
+    (fields,) = batch_fields
+    assert int(fields["max_new_tokens"]) == guard.max_new_tokens(["one sentence"], policy, 25.0)
+
+
+def test_token_cap_clamped_to_server_max_new_tokens(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    texts = ["a" * 100, "b" * 100]
+    wanted = guard.max_new_tokens(texts[:1], guard.DEFAULT_RUNAWAY_POLICY, _FRAME_RATE)
+    server_max = wanted // 2
+    batch_fields: list[dict[str, str]] = []
+    transport = _ready_transport(batch_fields, max_new_tokens=server_max)
+    engine = BreezeEngine(_config(tmp_path, batch_size=1), transport=transport)
+    with caplog.at_level(logging.DEBUG, logger="epub_to_m4b.tts.breeze"):
+        engine.synthesize(texts)
+    engine.close()
+
+    assert [int(f["max_new_tokens"]) for f in batch_fields] == [server_max, server_max]
+    clamp_logs = [r for r in caplog.records if "clamped" in r.getMessage()]
+    assert len(clamp_logs) == 1
+    assert clamp_logs[0].levelno == logging.DEBUG
+
+
+def test_clamped_cap_is_the_cut_limit(tmp_path: Path) -> None:
+    text = "c" * 100
+    policy = guard.DEFAULT_RUNAWAY_POLICY
+    between = (_retry_limit(text) + guard.cap_seconds([text], policy)) / 2
+    server_max = math.ceil(between * _FRAME_RATE)
+    server_cap = server_max / _FRAME_RATE
+    assert _retry_limit(text) < server_cap < guard.cap_seconds([text], policy)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(200, content=_pcm_bytes(1.0))
+        # every attempt runs away, a little past the server's own cap
+        segment = _pcm_bytes(server_cap + 1.0)
+        return httpx.Response(
+            200,
+            content=segment,
+            headers={"X-Segment-Bytes": str(len(segment)), "X-Sample-Rate": str(_SAMPLE_RATE)},
+        )
+
+    transport = _mock_transport(handler, max_new_tokens=server_max)
+    engine = BreezeEngine(_config(tmp_path), transport=transport)
+    (clip,) = engine.synthesize([text])
+    engine.close()
+    assert len(clip.samples) == int(server_cap * _SAMPLE_RATE)
+
+
+def test_batch_size_clamped_to_server_max_batch_texts(tmp_path: Path) -> None:
+    batch_fields: list[dict[str, str]] = []
+    transport = _ready_transport(batch_fields, max_batch_texts=2)
+    engine = BreezeEngine(_config(tmp_path, batch_size=64), transport=transport)
+    assert engine.max_batch == 2
+    engine.synthesize([f"sentence {i}" for i in range(5)])
+    engine.close()
+    assert [len(json.loads(f["texts"])) for f in batch_fields] == [2, 2, 1]
+
+
+def test_server_without_model_route_raises_clear_error(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    with pytest.raises(TTSError, match=r"/v1/model answered 404.*breeze-tts-server"):
+        BreezeEngine(_config(tmp_path), transport=httpx.MockTransport(handler))
+
+
+def test_model_route_missing_fields_names_them(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        if request.url.path == "/v1/model":
+            return httpx.Response(200, json={})
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    with pytest.raises(TTSError, match="breeze-tts-server") as exc_info:
+        BreezeEngine(_config(tmp_path), transport=httpx.MockTransport(handler))
+    for key in ("frame_rate", "model_digest", "max_new_tokens", "max_batch_texts"):
+        assert key in str(exc_info.value)
+
+
+def test_model_route_non_object_body_raises(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        return httpx.Response(200, json=[1, 2])
+
+    with pytest.raises(TTSError, match="JSON object"):
+        BreezeEngine(_config(tmp_path), transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("frame_rate", 0),
+        ("frame_rate", "12.5"),
+        ("frame_rate", True),
+        ("model_digest", ""),
+        ("max_new_tokens", 1.5),
+        ("max_batch_texts", 0),
+    ],
+)
+def test_invalid_model_field_raises(tmp_path: Path, key: str, value: object) -> None:
+    with pytest.raises(TTSError, match=rf"{key}=.*breeze-tts-server"):
+        BreezeEngine(_config(tmp_path), transport=_ready_transport(**{key: value}))
+
+
+def _fingerprint(config: BreezeConfig, **model: object) -> str:
+    engine = BreezeEngine(config, transport=_ready_transport(**model))
+    try:
+        return engine.fingerprint()
+    finally:
+        engine.close()
+
+
+def test_fingerprint_follows_server_model_digest(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    fp = _fingerprint(config)
+    assert _fingerprint(config) == fp
+    assert _fingerprint(config, model_digest="cd" * 32) != fp
+
+
+def test_fingerprint_ignores_model_path_in_command(tmp_path: Path) -> None:
+    local = _config(tmp_path, command=["breeze-infer-api", "/models/breeze-tts-2"])
+    moved = _config(tmp_path, command=["breeze-infer-api", "/elsewhere/breeze-tts-2"])
+    repo = _config(tmp_path, command=["breeze-infer-api", "BreezeBlue/Breeze-TTS-2"])
+    assert _fingerprint(local) == _fingerprint(moved) == _fingerprint(repo)

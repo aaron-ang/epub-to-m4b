@@ -158,7 +158,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `AAC_BITRATE` | `audio/ffmpeg.py` | AAC bitrate for the `.m4b` |
 | `_MIN_CHAPTER_SECONDS` | `audio/assemble.py` | Floor on assembled chapter length |
 | `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause cut / paragraph / heading |
-| `RetryPolicy` defaults | `tts/http.py` | Retry count, doubling backoff, Retry-After cap |
+| `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |
 | `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size |
 | `_SIDECAR_ENV` | `tts/breeze.py` | Env vars the Breeze server child gets when spawned (`TRITON_PTXAS_PATH`) |
 | `CLIP_BASE_SECONDS`, `CLIP_SECONDS_PER_CHAR` | `tts/guard.py` | Duration budget that triggers a reseed retry |
@@ -167,7 +167,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `TOKEN_CAP_SLACK` | `tts/guard.py` | Multiplier loosening the server-side token cap |
 | `FADE_SECONDS` | `tts/guard.py` | Fade-out applied to a truncated clip |
 | `RUNAWAY_RETRIES` | `tts/guard.py` | Reseed attempts before cutting |
-| `SidecarPolicy` defaults | `tts/sidecar.py` | Health/poll/startup/terminate timeouts, single-request and batch timeouts, busy status + retries + wait |
+| `SidecarPolicy` defaults | `tts/sidecar.py` | Health/poll/startup/terminate timeouts, single-request and batch timeouts, busy status + total busy wait + retry spacing |
 
 ## Reference material
 

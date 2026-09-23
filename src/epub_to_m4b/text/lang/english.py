@@ -116,21 +116,6 @@ def years_to_words(text: str) -> str:
 # roman numerals: "Chapter IV" -> "Chapter four" (headings only)
 # ---------------------------------------------------------------------------
 
-# "Chapter"/"Part"/"Book" followed by a roman token, including single letters
-# (I/V/X) which are only converted in this enumerative context.
-_ROMAN_AFTER_CHAPTER_RE = re.compile(r"\b((?i:chapter|part|book))\s+([MDCLXVI]{1,9})\b")
-
-# A bare multi-letter roman token elsewhere (e.g. a heading "IV. The Storm").
-# Single letters are excluded here on purpose: a lone "I" is almost always
-# the pronoun and a lone "V"/"X" is almost always a stray letter, not a
-# numeral.
-_ROMAN_STANDALONE_RE = re.compile(r"(?<!\w)([MDCLXVI]{2,9})(?!\w)")
-
-# Validates the candidate is a real roman numeral (rejects junk like "MMMM"
-# or "IIII" that happens to be made of roman letters but isn't a legal
-# numeral).
-_ROMAN_VALID_RE = re.compile(r"^(?=.)M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$")
-
 _ROMAN_VALUES = (
     ("M", 1000),
     ("CM", 900),
@@ -146,6 +131,25 @@ _ROMAN_VALUES = (
     ("IV", 4),
     ("I", 1),
 )
+
+# The single-letter numerals, e.g. "MDCLXVI" - the character class every
+# roman-token regex below matches.
+_ROMAN_LETTERS = "".join(token for token, _ in _ROMAN_VALUES if len(token) == 1)
+
+# "Chapter"/"Part"/"Book" followed by a roman token, including single letters
+# (I/V/X) which are only converted in this enumerative context.
+_ROMAN_AFTER_CHAPTER_RE = re.compile(rf"\b((?i:chapter|part|book))\s+([{_ROMAN_LETTERS}]{{1,9}})\b")
+
+# A bare multi-letter roman token elsewhere (e.g. a heading "IV. The Storm").
+# Single letters are excluded here on purpose: a lone "I" is almost always
+# the pronoun and a lone "V"/"X" is almost always a stray letter, not a
+# numeral.
+_ROMAN_STANDALONE_RE = re.compile(rf"(?<!\w)([{_ROMAN_LETTERS}]{{2,9}})(?!\w)")
+
+# Validates the candidate is a real roman numeral (rejects junk like "MMMM"
+# or "IIII" that happens to be made of roman letters but isn't a legal
+# numeral).
+_ROMAN_VALID_RE = re.compile(r"^(?=.)M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$")
 
 
 def _roman_to_int(roman: str) -> int:

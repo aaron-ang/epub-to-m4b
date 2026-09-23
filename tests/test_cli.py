@@ -30,6 +30,16 @@ def test_chapters_table(tiny_epub: Path, capsys: pytest.CaptureFixture[str]) -> 
     assert "One: The Beginning" in out and "Two: The End" in out
 
 
+def test_chapters_title_column_fits_longest_title(
+    tiny_epub: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["chapters", str(tiny_epub)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    width = len("One: The Beginning")
+    assert lines[1] == f"{'#':>3}  {'title':<{width}}  {'paras':>5}  {'chars':>7}  {'docs':>4}"
+    assert lines[2].startswith(f"  1  {'One: The Beginning':<{width}}  ")
+
+
 def test_dump_text_single_chapter(tiny_epub: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["dump-text", str(tiny_epub), "--chapter", "2"]) == 0
     out = capsys.readouterr().out

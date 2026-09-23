@@ -384,7 +384,7 @@ def test_post_until_free_retries_busy_then_returns_success() -> None:
     responses = iter([_busy(), _busy(), httpx.Response(200, content=b"pcm")])
     sleeps: list[float] = []
     on_busy = MagicMock()
-    policy = sidecar.SidecarPolicy(busy_retries=5, busy_wait=0.25)
+    policy = sidecar.SidecarPolicy(busy_timeout=1.25, busy_wait=0.25)
 
     response = sidecar.post_until_free(
         lambda: next(responses), policy=policy, on_busy=on_busy, sleep=sleeps.append
@@ -404,13 +404,13 @@ def test_post_until_free_exhausted_returns_last_busy_response() -> None:
         return _busy()
 
     sleeps: list[float] = []
-    policy = sidecar.SidecarPolicy(busy_retries=2, busy_wait=0.0)
+    policy = sidecar.SidecarPolicy(busy_timeout=1.0, busy_wait=0.5)
 
     response = sidecar.post_until_free(send, policy=policy, sleep=sleeps.append)
 
     assert response.status_code == 409
-    assert calls["n"] == policy.busy_retries + 1
-    assert len(sleeps) == policy.busy_retries
+    assert calls["n"] == 3
+    assert sleeps == [0.5, 0.5]
 
 
 def test_post_until_free_returns_non_busy_immediately() -> None:
@@ -435,8 +435,20 @@ def test_post_until_free_returns_non_busy_immediately() -> None:
 
 def test_post_until_free_honours_custom_busy_status() -> None:
     responses = iter([httpx.Response(503), httpx.Response(200)])
-    policy = sidecar.SidecarPolicy(busy_status=503, busy_retries=1, busy_wait=0.0)
+    policy = sidecar.SidecarPolicy(busy_status=503, busy_timeout=1.0, busy_wait=1.0)
 
     response = sidecar.post_until_free(lambda: next(responses), policy=policy, sleep=lambda _: None)
 
     assert response.status_code == 200
+
+
+def test_busy_retries_derive_from_timeout_and_wait() -> None:
+    assert sidecar.SidecarPolicy(busy_timeout=300.0, busy_wait=5.0).busy_retries == 60
+    # A partial final interval still gets its retry, so the wait covers the timeout.
+    assert sidecar.SidecarPolicy(busy_timeout=10.0, busy_wait=3.0).busy_retries == 4
+    assert sidecar.SidecarPolicy(busy_timeout=0.0).busy_retries == 0
+
+
+def test_busy_wait_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="busy_wait"):
+        sidecar.SidecarPolicy(busy_wait=0.0)

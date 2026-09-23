@@ -21,7 +21,9 @@ import numpy.typing as npt
 
 from epub_to_m4b.book import AudioClip
 
-_PCM16_SCALE = 32768.0
+_PCM16 = np.iinfo(np.int16)
+# Full-scale magnitude: float 1.0 maps to the int16 range's negative bound.
+_PCM16_SCALE = float(-_PCM16.min)
 
 
 def pcm16_to_float32(samples: npt.NDArray[np.int16]) -> npt.NDArray[np.float32]:
@@ -30,7 +32,7 @@ def pcm16_to_float32(samples: npt.NDArray[np.int16]) -> npt.NDArray[np.float32]:
 
 def float32_to_pcm16(samples: npt.NDArray[np.float32]) -> npt.NDArray[np.int16]:
     scaled = np.clip(samples, -1.0, 1.0) * _PCM16_SCALE
-    return np.clip(np.round(scaled), -_PCM16_SCALE, _PCM16_SCALE - 1).astype(np.int16)
+    return np.clip(np.round(scaled), _PCM16.min, _PCM16.max).astype(np.int16)
 
 
 def fingerprint_digest(*parts: str) -> str:

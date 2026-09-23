@@ -142,3 +142,12 @@ def test_pcm_response_to_clip_decodes_s16le() -> None:
 def test_pcm_response_to_clip_rejects_odd_length() -> None:
     with pytest.raises(TTSError, match="odd"):
         pcm_response_to_clip(httpx.Response(200, content=b"\x00\x01\x02"), 24000)
+
+
+def test_backoff_doubles_from_policy_base() -> None:
+    transport, _seen = _sequence(*[httpx.Response(503) for _ in range(4)])
+    sleeps: list[float] = []
+    policy = RetryPolicy(max_retries=3, backoff_base_seconds=0.5)
+    with httpx.Client(transport=transport) as client, pytest.raises(TTSError):
+        post_with_retry(client, _URL, policy=policy, sleep=sleeps.append)
+    assert sleeps == [0.5, 1.0, 2.0]

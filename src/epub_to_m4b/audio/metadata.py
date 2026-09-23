@@ -11,6 +11,7 @@ from pathlib import Path
 
 from mutagen.mp4 import MP4, MP4Cover
 
+from epub_to_m4b.audio.vtt import MS_PER_SECOND
 from epub_to_m4b.book import Book
 
 # ffmetadata escaping rule: these five characters must be backslash-escaped
@@ -36,10 +37,10 @@ def build_ffmetadata(book: Book, chapter_durations: Sequence[float]) -> str:
     cursor_ms = 0
     for chapter, duration in zip(book.chapters, chapter_durations, strict=True):
         start_ms = cursor_ms
-        end_ms = cursor_ms + round(duration * 1000)
+        end_ms = cursor_ms + round(duration * MS_PER_SECOND)
         lines += [
             "[CHAPTER]",
-            "TIMEBASE=1/1000",
+            f"TIMEBASE=1/{MS_PER_SECOND}",
             f"START={start_ms}",
             f"END={end_ms}",
             f"title={_escape(chapter.title)}",

@@ -175,7 +175,7 @@ def test_409_triggers_wait_and_retry(tmp_path: Path) -> None:
     transport = httpx.MockTransport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(
-        config, transport=transport, policy=SidecarPolicy(busy_retries=5, busy_wait=0.0)
+        config, transport=transport, policy=SidecarPolicy(busy_timeout=0.005, busy_wait=0.001)
     )
 
     (clip,) = engine.synthesize(["one sentence"])
@@ -202,7 +202,7 @@ def test_409_exhausts_retries_and_raises(tmp_path: Path) -> None:
     transport = httpx.MockTransport(handler)
     config = _config(tmp_path)
     engine = BreezeEngine(
-        config, transport=transport, policy=SidecarPolicy(busy_retries=2, busy_wait=0.0)
+        config, transport=transport, policy=SidecarPolicy(busy_timeout=0.002, busy_wait=0.001)
     )
 
     with pytest.raises(httpx.HTTPStatusError):

@@ -23,6 +23,7 @@ engine shares one vocabulary and tests can shrink the waits.
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -52,8 +53,17 @@ class SidecarPolicy:
     request_timeout: float = 300.0  # single non-batched request (bootstrap voice etc.)
     batch_timeout: float = 1800.0  # a full batch decodes for minutes, not seconds
     busy_status: int = httpx.codes.CONFLICT  # server answers this while another inference runs
-    busy_retries: int = 60
-    busy_wait: float = 5.0  # between busy retries; retries*wait bounds the total wait
+    busy_timeout: float = 300.0  # total wait for a busy server before giving up
+    busy_wait: float = 5.0  # between busy retries
+
+    def __post_init__(self) -> None:
+        if self.busy_wait <= 0:
+            raise ValueError(f"busy_wait must be positive, got {self.busy_wait}")
+
+    @property
+    def busy_retries(self) -> int:
+        """Retries that fit in ``busy_timeout`` at ``busy_wait`` spacing."""
+        return math.ceil(self.busy_timeout / self.busy_wait)
 
 
 DEFAULT_SIDECAR_POLICY = SidecarPolicy()
@@ -222,7 +232,8 @@ def post_until_free(
     """Call ``send()`` until the server stops answering ``policy.busy_status``.
 
     Tries at most ``policy.busy_retries + 1`` times, sleeping
-    ``policy.busy_wait`` between attempts. ``on_busy`` runs once, on the
+    ``policy.busy_wait`` between attempts, so the total wait is about
+    ``policy.busy_timeout``. ``on_busy`` runs once, on the
     first busy answer, so callers can log without spamming. Returns the last
     response - possibly still busy - and never raises on status; the caller
     decides with ``raise_for_status()``. ``send`` is zero-arg so callers can

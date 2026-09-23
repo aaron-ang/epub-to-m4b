@@ -145,23 +145,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     return result
 
 
-# Width of the title column in `chapters` output; longer titles are truncated
-# with an ellipsis so the numeric columns stay aligned.
+# Widest the title column in `chapters` output gets; longer titles are
+# truncated with an ellipsis so the numeric columns stay aligned.
 _TITLE_COLUMN_WIDTH = 50
 
 
 def _cmd_chapters(book: Book, _args: argparse.Namespace) -> int:
     print(f"{book.title} — {book.author or 'unknown author'} ({len(book.chapters)} chapters)")
-    print(f"{'#':>3}  {'title':<{_TITLE_COLUMN_WIDTH}}  {'paras':>5}  {'chars':>7}  {'docs':>4}")
+    longest = max((len(ch.title) for ch in book.chapters), default=0)
+    width = max(len("title"), min(_TITLE_COLUMN_WIDTH, longest))
+    print(f"{'#':>3}  {'title':<{width}}  {'paras':>5}  {'chars':>7}  {'docs':>4}")
     for n, ch in enumerate(book.chapters, start=1):
         chars = sum(len(p.text) for p in ch.paragraphs)
-        title = (
-            ch.title
-            if len(ch.title) <= _TITLE_COLUMN_WIDTH
-            else ch.title[: _TITLE_COLUMN_WIDTH - 1] + "…"
-        )
+        title = ch.title if len(ch.title) <= width else ch.title[: width - 1] + "…"
         print(
-            f"{n:>3}  {title:<{_TITLE_COLUMN_WIDTH}}  {len(ch.paragraphs):>5}"
+            f"{n:>3}  {title:<{width}}  {len(ch.paragraphs):>5}"
             f"  {chars:>7}  {len(ch.source_ids):>4}"
         )
     return 0

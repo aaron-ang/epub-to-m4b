@@ -26,7 +26,7 @@ from epub_to_m4b.book import AudioClip
 from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.tts.base import pcm16_to_float32
 
-_RETRYABLE_STATUSES = frozenset({408, 429})
+_RETRYABLE_STATUSES = frozenset({httpx.codes.REQUEST_TIMEOUT, httpx.codes.TOO_MANY_REQUESTS})
 _BODY_EXCERPT_CHARS = 200
 # Speech for one sentence takes seconds; connecting should not.
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
@@ -39,10 +39,10 @@ class TTSError(EpubToM4bError):
 
 @dataclass(frozen=True)
 class RetryPolicy:
-    # Retries and their doubling waits together ride out a transient outage
-    # of about half a minute without hammering the provider.
+    # Retry n waits backoff_base_seconds * 2**n: doubling waits ride out a
+    # transient outage without hammering the provider.
     max_retries: int = 5
-    backoff_seconds: tuple[float, ...] = (1, 2, 4, 8, 16)
+    backoff_base_seconds: float = 1.0
     # Cap on an honoured Retry-After header so a huge value from the
     # provider does not stall the run indefinitely.
     max_retry_after_seconds: float = 60.0
@@ -60,7 +60,7 @@ def new_client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
 
 
 def _is_retryable(status: int) -> bool:
-    return status in _RETRYABLE_STATUSES or status >= 500
+    return status in _RETRYABLE_STATUSES or status >= httpx.codes.INTERNAL_SERVER_ERROR
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
@@ -86,8 +86,7 @@ def _wait_before_retry(response: httpx.Response | None, attempt: int, policy: Re
         hinted = _retry_after_seconds(response)
         if hinted is not None:
             return min(hinted, policy.max_retry_after_seconds)
-    index = min(attempt, len(policy.backoff_seconds) - 1)
-    return policy.backoff_seconds[index]
+    return policy.backoff_base_seconds * 2.0**attempt
 
 
 def _excerpt(response: httpx.Response) -> str:

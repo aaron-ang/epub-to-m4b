@@ -50,10 +50,10 @@ class GapPolicy:
     # Shorter pause after a clip ending in , ; : - a clause of the same
     # thought continues in the next clip.
     clause: float = 0.10
-    # Longer pause after the last sentence of a paragraph (unless it also
-    # closes the chapter, where the chapter boundary provides the break).
+    # Longer pause after the last sentence of a paragraph.
     paragraph: float = 0.40
-    # Pause after a chapter or section title.
+    # Pause after a chapter or section title, and after a chapter's last
+    # sentence: the next chapter starts in the same file.
     heading: float = 0.80
 
 
@@ -70,15 +70,13 @@ def sentence_gap(
 ) -> float:
     """The gap that follows one sentence, per the punctuation/position rules.
 
-    Heading sentences always get the heading gap. A paragraph-closing
-    sentence gets the paragraph gap, unless it also closes the chapter -
-    the chapter boundary itself provides the separation, so that case falls
-    through to the ordinary punctuation-based gap instead of stacking an
-    extra pause.
+    Headings and a chapter's last sentence get the heading gap, a
+    paragraph's last sentence the paragraph gap, anything else a gap by its
+    final punctuation.
     """
-    if kind is ParagraphKind.HEADING:
+    if kind is ParagraphKind.HEADING or is_last_in_chapter:
         return policy.heading
-    if is_last_in_paragraph and not is_last_in_chapter:
+    if is_last_in_paragraph:
         return policy.paragraph
     return policy.clause if _terminal_char(text) in _CLAUSE_CHARS else policy.sentence_end
 

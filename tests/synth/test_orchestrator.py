@@ -56,7 +56,7 @@ def test_last_sentence_of_paragraph_not_last_of_chapter_gets_paragraph_gap() -> 
     assert sentences[0].gap_after == GapPolicy().paragraph
 
 
-def test_last_sentence_of_chapter_falls_back_to_punctuation_gap() -> None:
+def test_last_sentence_of_chapter_gets_heading_gap() -> None:
     chapter = Chapter(
         title="Ch",
         paragraphs=(
@@ -67,7 +67,7 @@ def test_last_sentence_of_chapter_falls_back_to_punctuation_gap() -> None:
     )
     sentences = book_to_sentences(_book(chapter))[0]
     assert sentences[-1].text == _S2
-    assert sentences[-1].gap_after == GapPolicy().sentence_end
+    assert sentences[-1].gap_after == GapPolicy().heading
 
 
 def test_chapter_index_is_recorded_on_every_sentence() -> None:

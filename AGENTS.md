@@ -34,7 +34,7 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 
 - Engines receive plain text only: no files, SSML, or silence. The orchestrator owns gaps.
 - `audio/` owns files; everything upstream works with in-memory dataclasses.
-- No inline `[break]`/`[pause]` markers. Gaps are `Sentence.gap_after`, computed deterministically from punctuation.
+- No inline `[break]`/`[pause]` markers. Gaps are `Sentence.gap_after`, computed deterministically from punctuation and position (paragraph end, chapter end, heading).
 - API keys come from the env var named by `api_key_env`, read in `tts/registry.py` only. Never in TOML, never in engines.
 - Engine-specific behaviour lives in that engine's module, not the ABC. Sidecar lifecycle (spawn/adopt, health poll, busy-wait, child env) lives in `tts/sidecar.py` behind `SidecarPolicy` and is shared by every sidecar engine.
 - Adopted sidecar servers are never killed on `close()`.
@@ -160,7 +160,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `AAC_BITRATE` | `audio/ffmpeg.py` | AAC bitrate for the `.m4b` |
 | `LOUDNESS_TARGET_LUFS` | `audio/ffmpeg.py` | Integrated loudness `loudnorm` normalizes the `.m4b` to |
 | `_MIN_CHAPTER_SECONDS` | `audio/assemble.py` | Floor on assembled chapter length |
-| `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause cut / paragraph / heading |
+| `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause / paragraph / heading and chapter end |
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |
 | `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size (clamped to server `max_batch_texts`) |
 | `_SIDECAR_ENV` | `tts/breeze.py` | Env vars the Breeze server child gets when spawned (`TRITON_PTXAS_PATH`) |

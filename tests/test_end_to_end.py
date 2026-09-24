@@ -12,7 +12,7 @@ from epub_to_m4b.audio.ffmpeg import LOUDNESS_TARGET_LUFS, probe_chapters, run_c
 from epub_to_m4b.cli import main
 from epub_to_m4b.epub.reader import read_book
 from epub_to_m4b.synth import cache
-from epub_to_m4b.synth.orchestrator import chapter_to_sentences
+from epub_to_m4b.synth.orchestrator import book_to_sentences
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -35,9 +35,7 @@ def test_convert_produces_playable_m4b_and_vtt(tiny_epub: Path, tmp_path: Path) 
     assert [c["tags"]["title"] for c in chapters] == ["One: The Beginning", "Two: The End"]
 
     book = read_book(tiny_epub)
-    expected_sentences = sum(
-        len(chapter_to_sentences(chapter, idx)) for idx, chapter in enumerate(book.chapters)
-    )
+    expected_sentences = sum(len(ch) for ch in book_to_sentences(book))
     vtt_text = vtt_path.read_text(encoding="utf-8")
     cue_count = vtt_text.count(" --> ")
     assert cue_count == expected_sentences

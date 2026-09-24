@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from epub_to_m4b.book import Chapter, Paragraph, ParagraphKind
+from epub_to_m4b.book import Book, Chapter, Paragraph, ParagraphKind
 from epub_to_m4b.synth.orchestrator import (
     GapPolicy,
-    chapter_to_sentences,
+    book_to_sentences,
     sentence_gap,
 )
 
 _S1 = "This is a considerably long first sentence that should not get merged."
 _S2 = "This is a second, equally long sentence that also should not get merged."
+
+
+def _book(*chapters: Chapter) -> Book:
+    return Book(
+        title="B", author=None, cover=None, cover_mime=None, chapters=chapters, source_sha256="0"
+    )
 
 
 def test_heading_sentence_gets_heading_gap() -> None:
@@ -20,7 +26,7 @@ def test_heading_sentence_gets_heading_gap() -> None:
         ),
         source_ids=("c1",),
     )
-    sentences = chapter_to_sentences(chapter, 0)
+    sentences = book_to_sentences(_book(chapter))[0]
     assert sentences[0].text == "Chapter One"
     assert sentences[0].gap_after == GapPolicy().heading
 
@@ -31,7 +37,7 @@ def test_mid_paragraph_sentence_gets_sentence_end_gap() -> None:
         paragraphs=(Paragraph(text=f"{_S1} {_S2}", kind=ParagraphKind.BODY),),
         source_ids=("c1",),
     )
-    sentences = chapter_to_sentences(chapter, 0)
+    sentences = book_to_sentences(_book(chapter))[0]
     assert [s.text for s in sentences] == [_S1, _S2]
     assert sentences[0].gap_after == GapPolicy().sentence_end
 
@@ -45,7 +51,7 @@ def test_last_sentence_of_paragraph_not_last_of_chapter_gets_paragraph_gap() -> 
         ),
         source_ids=("c1",),
     )
-    sentences = chapter_to_sentences(chapter, 0)
+    sentences = book_to_sentences(_book(chapter))[0]
     assert sentences[0].text == _S1
     assert sentences[0].gap_after == GapPolicy().paragraph
 
@@ -59,7 +65,7 @@ def test_last_sentence_of_chapter_falls_back_to_punctuation_gap() -> None:
         ),
         source_ids=("c1",),
     )
-    sentences = chapter_to_sentences(chapter, 0)
+    sentences = book_to_sentences(_book(chapter))[0]
     assert sentences[-1].text == _S2
     assert sentences[-1].gap_after == GapPolicy().sentence_end
 
@@ -68,8 +74,8 @@ def test_chapter_index_is_recorded_on_every_sentence() -> None:
     chapter = Chapter(
         title="Ch", paragraphs=(Paragraph(text=_S1, kind=ParagraphKind.BODY),), source_ids=("c1",)
     )
-    sentences = chapter_to_sentences(chapter, 7)
-    assert all(s.chapter_index == 7 for s in sentences)
+    sentences = book_to_sentences(_book(chapter, chapter))
+    assert [[s.chapter_index for s in ch] for ch in sentences] == [[0], [1]]
 
 
 def test_sentence_gap_defensive_clause_case() -> None:
@@ -106,3 +112,21 @@ def test_sentence_gap_custom_policy_values() -> None:
         )
         == 3.0
     )
+
+
+def test_empty_chapter_keeps_later_chapters_aligned() -> None:
+    one = Chapter(
+        title="One", paragraphs=(Paragraph(text=_S1, kind=ParagraphKind.BODY),), source_ids=("c1",)
+    )
+    empty = Chapter(title="Empty", paragraphs=(), source_ids=("c2",))
+    three = Chapter(
+        title="Three",
+        paragraphs=(Paragraph(text="It cost $3 in 1999.", kind=ParagraphKind.BODY),),
+        source_ids=("c3",),
+    )
+    sentences = book_to_sentences(_book(one, empty, three))
+    assert [[s.text for s in ch] for ch in sentences] == [
+        [_S1],
+        [],
+        ["It cost three dollars in nineteen ninety nine."],
+    ]

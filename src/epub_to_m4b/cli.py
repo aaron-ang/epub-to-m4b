@@ -36,7 +36,7 @@ from epub_to_m4b.synth.cache import (
     store_encode_digest,
 )
 from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
-from epub_to_m4b.text.normalize import normalize
+from epub_to_m4b.text.normalize import normalize_all
 from epub_to_m4b.text.split import split_paragraph
 from epub_to_m4b.tts.registry import available_engines, create_engine
 
@@ -67,9 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_book_args(dump)
     dump.add_argument("--chapter", type=int, default=None, help="1-based chapter index")
-    dump.add_argument(
-        "--normalized", action="store_true", help="run each paragraph through normalize(text)"
-    )
+    dump.add_argument("--normalized", action="store_true", help="run each paragraph through NeMo")
     dump.add_argument(
         "--split",
         action="store_true",
@@ -180,12 +178,15 @@ def _cmd_dump_text(book: Book, args: argparse.Namespace) -> int:
             print(f"error: chapter {args.chapter} out of range 1..{len(chapters)}", file=sys.stderr)
             return 1
         chapters = [chapters[args.chapter - 1]]
-    normalized = args.normalized or args.split
+    paragraph_texts = [p.text for _, ch in chapters for p in ch.paragraphs]
+    if args.normalized or args.split:
+        paragraph_texts = normalize_all(paragraph_texts)
+    texts = iter(paragraph_texts)
     for n, ch in chapters:
         print(f"=== [{n}] {ch.title}")
         for p in ch.paragraphs:
             prefix = "# " if p.kind is ParagraphKind.HEADING else ""
-            text = normalize(p.text) if normalized else p.text
+            text = next(texts)
             print(f"{prefix}{text}")
             if args.split:
                 sentence_paragraph = Paragraph(text=text, kind=p.kind)

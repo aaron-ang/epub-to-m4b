@@ -17,12 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
-          enable-cache: true
-      - run: uv python install 3.14
+          locked: true
+          cache: true
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: uv sync --frozen
-      - run: make check
-      - run: uv build
-      - run: uvx --from "$(ls dist/*.whl)" epub-to-m4b --version
+      - run: pixi run check
+      - run: pixi exec hatch build
+      # The wheel installed from PyPI dependencies on top of conda-forge's pynini,
+      # as a PyPI user installs it.
+      - run: >-
+          pixi exec -s python=3.14 -s pynini=2.1.6.post1 -s pip --
+          sh -c 'pip install dist/*.whl && epub-to-m4b --version'

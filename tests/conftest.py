@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from epub_to_m4b.text.normalize import nemo_normalizer
 from tests.helpers import xhtml
 
 CONTAINER_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -98,3 +100,15 @@ def _isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     empty = tmp_path / "e2m-empty-config.toml"
     empty.write_text("", encoding="utf-8")
     monkeypatch.setenv("E2M_CONFIG", str(empty))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _nemo_normalizer(pytestconfig: pytest.Config) -> Iterator[None]:
+    # One English NeMo normalizer per session, its compiled grammars kept in
+    # pytest's cache dir across sessions. The env var reaches spawned CLI runs too.
+    assert pytestconfig.cache is not None
+    grammars = pytestconfig.cache.mkdir("nemo-grammars")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("E2M_NEMO_CACHE_DIR", str(grammars))
+        nemo_normalizer("en")
+        yield

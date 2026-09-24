@@ -4,17 +4,18 @@
 
 | Step | Command |
 |------|---------|
-| Install Python 3.14 and dependencies | `uv sync` |
+| Install [pixi](https://pixi.sh) | `curl -fsSL https://pixi.sh/install.sh \| bash` |
+| Install Python 3.14 and dependencies | `pixi install` |
 | Install ffmpeg | `sudo apt-get install -y ffmpeg` (Debian/Ubuntu) or `brew install ffmpeg` (macOS) |
 
 ## Run checks
 
-| Target | What it runs |
-|--------|--------------|
-| `make check` | `ruff check`, `ruff format --check`, `mypy --strict`, `pytest` |
-| `make coverage` | `pytest --cov --cov-report=term-missing`; fails under 90% |
-| `make format` | `ruff format` + `ruff check --fix` |
-| `make ci` | Alias of `make check`; the CI workflow runs this |
+| Task | What it runs |
+|------|--------------|
+| `pixi run check` | `ruff check`, `ruff format --check`, `mypy --strict`, `pytest`; the CI workflow runs this |
+| `pixi run coverage` | `pytest --cov --cov-report=term-missing`; fails under 90% |
+| `pixi run format` | `ruff format` + `ruff check --fix` |
+| `pixi run lint` / `typecheck` / `test` | One step of `check` |
 
 Sidecar and paid-API tests are excluded by default (`-m 'not sidecar and not network'`).
 
@@ -44,7 +45,7 @@ Sidecar and paid-API tests are excluded by default (`-m 'not sidecar and not net
 
 1. Merges to `main` make [release-please](https://github.com/googleapis/release-please) open or update a release PR (`.github/workflows/release.yml`) with the version bump and `CHANGELOG.md` entry.
 2. Merging that PR tags `vX.Y.Z` and publishes a GitHub Release.
-3. The same workflow's `publish` job then runs at the new tag: `uv build`, upload to PyPI via Trusted Publishing (OIDC, no token). Re-run by hand: Actions → `release` → Run workflow with `tag`.
+3. The same workflow's `publish` job then runs at the new tag: `pixi exec hatch build`, upload to PyPI via Trusted Publishing (OIDC, no token). Re-run by hand: Actions → `release` → Run workflow with `tag`.
 
 ## Architecture
 

@@ -23,11 +23,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from epub_to_m4b.audio.assemble import assemble_chapter
-from epub_to_m4b.book import AudioClip, Book, Chapter, Paragraph, ParagraphKind, Sentence
+from epub_to_m4b.book import AudioClip, Book, Paragraph, ParagraphKind, Sentence
 from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.batching import PendingClip, make_batches
-from epub_to_m4b.text.normalize import normalize
+from epub_to_m4b.text.normalize import normalize_all
 from epub_to_m4b.text.split import CLOSERS, split_paragraph
 from epub_to_m4b.tts.base import TTSEngine
 
@@ -47,8 +47,8 @@ class GapPolicy:
 
     # Breath between sentences ending in . ! ?
     sentence_end: float = 0.25
-    # Shorter pause after , ; : - the clip was force-cut mid-sentence by the
-    # splitter, so the next clip continues the same sentence.
+    # Shorter pause after a clip ending in , ; : - a clause of the same
+    # thought continues in the next clip.
     clause: float = 0.10
     # Longer pause after the last sentence of a paragraph (unless it also
     # closes the chapter, where the chapter boundary provides the break).
@@ -92,33 +92,37 @@ def _terminal_char(text: str) -> str:
     return stripped[-1] if stripped else ""
 
 
-def chapter_to_sentences(
-    chapter: Chapter,
-    chapter_index: int,
-    *,
-    policy: GapPolicy = _DEFAULT_POLICY,
-    lang: str = "en",
-) -> list[Sentence]:
-    flat: list[tuple[str, ParagraphKind, bool]] = []
-    for paragraph in chapter.paragraphs:
-        normalized = normalize(paragraph.text, lang=lang)
-        pieces = split_paragraph(Paragraph(text=normalized, kind=paragraph.kind))
-        last = len(pieces) - 1
-        for i, piece in enumerate(pieces):
-            flat.append((piece, paragraph.kind, i == last))
-
-    last_index = len(flat) - 1
-    sentences: list[Sentence] = []
-    for i, (text, kind, is_last_in_paragraph) in enumerate(flat):
-        gap = sentence_gap(
-            text,
-            kind,
-            is_last_in_paragraph=is_last_in_paragraph,
-            is_last_in_chapter=i == last_index,
-            policy=policy,
+def book_to_sentences(
+    book: Book, *, policy: GapPolicy = _DEFAULT_POLICY, lang: str = "en"
+) -> list[list[Sentence]]:
+    """Each chapter's sentences. The whole book is normalized in one call so
+    every CPU core gets an equal share of it."""
+    texts = iter(normalize_all([p.text for ch in book.chapters for p in ch.paragraphs], lang=lang))
+    chapters: list[list[Sentence]] = []
+    for idx, chapter in enumerate(book.chapters):
+        flat: list[tuple[str, ParagraphKind, bool]] = []
+        for paragraph in chapter.paragraphs:
+            pieces = split_paragraph(Paragraph(text=next(texts), kind=paragraph.kind))
+            last = len(pieces) - 1
+            flat.extend((piece, paragraph.kind, i == last) for i, piece in enumerate(pieces))
+        last_index = len(flat) - 1
+        chapters.append(
+            [
+                Sentence(
+                    text=text,
+                    gap_after=sentence_gap(
+                        text,
+                        kind,
+                        is_last_in_paragraph=is_last_in_paragraph,
+                        is_last_in_chapter=i == last_index,
+                        policy=policy,
+                    ),
+                    chapter_index=idx,
+                )
+                for i, (text, kind, is_last_in_paragraph) in enumerate(flat)
+            ]
         )
-        sentences.append(Sentence(text=text, gap_after=gap, chapter_index=chapter_index))
-    return sentences
+    return chapters
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,8 +172,9 @@ def _plan_chapters(
     lang: str,
 ) -> list[_ChapterPlan]:
     plans = []
-    for idx, chapter in enumerate(book.chapters):
-        sentences = chapter_to_sentences(chapter, idx, policy=policy, lang=lang)
+    for idx, (chapter, sentences) in enumerate(
+        zip(book.chapters, book_to_sentences(book, policy=policy, lang=lang), strict=True)
+    ):
         keys = tuple(cache.clip_cache_key(s.text) for s in sentences)
         gaps = tuple(s.gap_after for s in sentences)
         manifest = cache.current_chapter_manifest(

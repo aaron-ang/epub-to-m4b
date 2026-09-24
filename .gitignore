@@ -11,3 +11,4 @@ dist/
 .coverage.*
 htmlcov/
 build/
+.pixi/

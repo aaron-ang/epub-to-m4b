@@ -15,19 +15,21 @@ https://github.com/user-attachments/assets/1cdd67f2-acef-4192-b6ba-218b0e352c3e
 
 ## Quick start
 
-Requires Python 3.14, [uv](https://docs.astral.sh/uv/), and `ffmpeg` + `ffprobe` on `PATH`.
+Requires [pixi](https://pixi.sh) and `ffmpeg` + `ffprobe` on `PATH`. pixi installs Python 3.14 and the rest.
 
 ```bash
-uv tool install epub-to-m4b   # or: pipx install epub-to-m4b
-epub-to-m4b chapters book.epub
+git clone https://github.com/aaron-ang/epub-to-m4b && cd epub-to-m4b && pixi install
+pixi run epub-to-m4b chapters book.epub
+pixi run epub-to-m4b convert book.epub --engine silence -o out/
 ```
 
-From source:
+From PyPI: text normalization uses [NeMo text processing](https://github.com/NVIDIA/NeMo-text-processing), which needs `pynini` 2.1.6.post1. PyPI has no Python 3.14 wheel of it, and no Linux aarch64 or macOS wheel of any pynini version, so take `pynini` from conda-forge and the package from PyPI:
 
 ```bash
-git clone https://github.com/aaron-ang/epub-to-m4b && cd epub-to-m4b && uv sync
-uv run epub-to-m4b chapters book.epub
-uv run epub-to-m4b convert book.epub --engine silence -o out/
+pixi init e2m && cd e2m
+pixi add python=3.14 pynini=2.1.6.post1 editdistance
+pixi add --pypi epub-to-m4b
+pixi run epub-to-m4b chapters book.epub
 ```
 
 `silence` renders a silent `.m4b`. Speech needs an `[engine.<name>]` table in `config.toml`; see [Configuration](#configuration).
@@ -42,13 +44,13 @@ voice = "alloy"
 
 ```bash
 export OPENAI_API_KEY=...
-uv run epub-to-m4b convert book.epub --engine openai -o out/
+pixi run epub-to-m4b convert book.epub --engine openai -o out/
 ```
 
 ## Example
 
 ```
-$ uv run epub-to-m4b chapters outliers.epub
+$ pixi run epub-to-m4b chapters outliers.epub
 Outliers the story of success — Gladwell Malcolm (14 chapters)
   #  title                                               paras    chars  docs
   1  INTRODUCTION — The Roseto Mystery                      27    12584     3
@@ -104,7 +106,7 @@ Chapter markers in the rendered file (`ffprobe -show_chapters out/outliers-the-s
 | Flag           | Meaning                                                  |
 |----------------|----------------------------------------------------------|
 | `--chapter N`  | Only chapter `N` (1-based)                               |
-| `--normalized` | Run each paragraph through text normalization            |
+| `--normalized` | Run each paragraph through text normalization (NeMo)     |
 | `--split`      | Also show sentence boundaries (implies `--normalized`)   |
 
 Flags shared by all subcommands:
@@ -117,10 +119,10 @@ Flags shared by all subcommands:
 `--version` prints the package version.
 
 ```bash
-uv run epub-to-m4b chapters book.epub
-uv run epub-to-m4b dump-text book.epub --chapter 3 --split
-uv run epub-to-m4b convert book.epub --engine silence -o /tmp/dry-run
-OPENAI_API_KEY=... uv run epub-to-m4b convert book.epub --engine openai -o ~/audiobooks
+pixi run epub-to-m4b chapters book.epub
+pixi run epub-to-m4b dump-text book.epub --chapter 3 --split
+pixi run epub-to-m4b convert book.epub --engine silence -o /tmp/dry-run
+OPENAI_API_KEY=... pixi run epub-to-m4b convert book.epub --engine openai -o ~/audiobooks
 ```
 
 ## Configuration
@@ -215,7 +217,8 @@ command = [
 - Rerun the same command to resume an interrupted or partial render.
 - Sentence clips are cached as FLAC under `<cache_dir>/clips/<engine-fingerprint>/`, shared across books. Assembled chapters are cached under `<out_dir>/.work/<book-id>/chapters/`.
 - Changing engine, voice, model, or other audio settings stops old clips being reused. Old clips stay on disk.
-- Clips are keyed by the exact sentence text. A text pipeline change (`text/normalize.py`, `text/split.py`, `text/lang/*`) re-synthesizes only sentences whose text it changed.
+- Clips are keyed by the exact sentence text. A text pipeline change (`text/normalize.py`, `text/split.py`, a new `nemo-text-processing`) re-synthesizes only sentences whose text it changed.
+- NeMo compiles a language's grammars on first use into `<cache_dir>/nemo/<version>/<lang>/` (`E2M_NEMO_CACHE_DIR` replaces `<cache_dir>/nemo`); later runs load them from there.
 - A missing or damaged `.m4b`, or one encoded with different encode settings, is rebuilt; an up-to-date one is kept and only the `.vtt` is rewritten.
 
 ## Troubleshooting
@@ -233,7 +236,7 @@ command = [
 ## Development
 
 ```bash
-make check   # ruff check, ruff format --check, mypy --strict, pytest
+pixi run check   # ruff check, ruff format --check, mypy --strict, pytest
 ```
 
 ## Contributing

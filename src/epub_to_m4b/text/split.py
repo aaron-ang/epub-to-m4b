@@ -1,22 +1,19 @@
-"""Split a paragraph's text into sentence-sized chunks for the TTS engine.
+"""Split a paragraph's normalized text into clip-sized pieces for the TTS engine.
 
-Splits on sentence punctuation, force-cuts anything still too long at the
-best available punctuation/space, then merges orphan-short fragments back
-into a neighbor.
+Cuts at sentence ends, force-cuts any sentence still over the limit at its
+best comma, semicolon or space, drops pieces with nothing to say, then fills
+each clip with consecutive pieces up to the limit.
 
-This module only produces raw sentence text. The orchestrator wraps each
-string into a ``Sentence`` with a computed ``gap_after`` - it owns gaps
-between clips, not the splitter, so that logic is out of scope here.
+This module only produces raw text. The orchestrator wraps each string into a
+``Sentence`` with a computed ``gap_after``; gaps between clips are its job.
 """
 
 from __future__ import annotations
 
-from epub_to_m4b.book import Paragraph
-from epub_to_m4b.text.lang.tables_en import ABBREV_RE
+import re
+from itertools import pairwise
 
-# Sentence-ending punctuation. "." gets extra scrutiny below (abbreviations,
-# decimals); ! ? ; : always end a sentence wherever they appear.
-_BOUNDARY_CHARS = ".!?;:"
+from epub_to_m4b.book import Paragraph
 
 # A closing quote/bracket that belongs with the sentence that just ended,
 # e.g. the `"` in `He said "stop."` - the boundary is after it, not before.
@@ -30,125 +27,50 @@ CLOSERS = "\"')]\u201d\u2019"
 # provider's per-request cap is far away.
 DEFAULT_MAX_CHARS = 125
 
-
-def _protected_periods(text: str) -> set[int]:
-    """Indices of '.' characters that belong to a known abbreviation."""
-    protected: set[int] = set()
-    for match in ABBREV_RE.finditer(text):
-        for offset, ch in enumerate(match.group(0)):
-            if ch == ".":
-                protected.add(match.start() + offset)
-    return protected
+# ! ? ; : or a full stop, plus any closers, followed by whitespace or the
+# end. A full stop after a lone capital ("J. K. Rowling", "S. Place") is a
+# name initial; a one-letter sentence-final word ("Plan B. Then") is misread
+# the same way, and the length cut still bounds it.
+_SENTENCE_END = re.compile(rf"(?:[!?;:]|(?<!\b[A-Z])\.)[{re.escape(CLOSERS)}]*(?=\s|$)")
 
 
-def _is_initial(text: str, i: int) -> bool:
-    """Whether the '.' at ``i`` follows a lone uppercase letter that is a
-    whole word ("J. K. Rowling", "S. Place"), i.e. a name initial rather than
-    a sentence end. A one-letter sentence-final word ("Plan B. Then") is
-    misread the same way; the ``max_chars`` cut still bounds its length."""
-    if i < 1 or not text[i - 1].isupper():
-        return False
-    return i < 2 or not text[i - 2].isalnum()
-
-
-def _sentence_end_positions(text: str) -> list[int]:
-    protected = _protected_periods(text)
-    n = len(text)
-    positions: list[int] = []
-    i = 0
-    while i < n:
-        ch = text[i]
-        if ch in _BOUNDARY_CHARS:
-            if ch == "." and (i in protected or _is_initial(text, i)):
-                i += 1
-                continue
-            prev_digit = i > 0 and text[i - 1].isdigit()
-            next_digit = i + 1 < n and text[i + 1].isdigit()
-            if ch == "." and prev_digit and next_digit:
-                # Decimal point ("3.14"): digit immediately on both sides.
-                i += 1
-                continue
-            end = i + 1
-            while end < n and text[end] in CLOSERS:
-                end += 1
-            if end >= n or text[end].isspace():
-                positions.append(end)
-                i = end
-                continue
-        i += 1
-    return positions
-
-
-def _raw_sentences(text: str) -> list[str]:
-    positions = _sentence_end_positions(text)
-    pieces: list[str] = []
-    last = 0
-    for end in positions:
-        piece = text[last:end].strip()
-        if piece:
-            pieces.append(piece)
-        last = end
-    tail = text[last:].strip()
-    if tail:
-        pieces.append(tail)
-    return pieces
+def _sentences(text: str) -> list[str]:
+    ends = [m.end() for m in _SENTENCE_END.finditer(text)]
+    return [s for a, b in pairwise([0, *ends, len(text)]) if (s := text[a:b].strip())]
 
 
 def _cut_long(piece: str, max_chars: int) -> list[str]:
-    if len(piece) <= max_chars:
-        return [piece]
-    window = piece[: max_chars + 1]
-    # Preference 1: the last comma/semicolon before the limit, kept with the
-    # left half so the pause falls where the punctuation already implies one.
-    comma_pos = window.rfind(",")
-    semi_pos = window.rfind(";")
-    cut = max(comma_pos, semi_pos)
-    if cut > 0:
-        idx = cut + 1
-    else:
-        # Preference 2: the last space before the limit.
-        idx = window.rfind(" ")
-        if idx <= 0:
-            # Preference 3 (last resort): a hard cut mid-word at the limit.
-            idx = max_chars
-    left = piece[:idx].strip()
-    right = piece[idx:].strip()
-    if not left or not right:
-        return [piece.strip()]
-    return [left, *_cut_long(right, max_chars)]
+    """Cut after the last comma or semicolon within the limit, so the pause
+    falls where the punctuation already implies one; else at the last space;
+    else mid-word at the limit."""
+    pieces = []
+    while len(piece) > max_chars:
+        # The punctuation stays left of the cut, a space is dropped at it.
+        head = piece[:max_chars]
+        cut = max(head.rfind(","), head.rfind(";")) + 1 or piece.rfind(" ", 0, max_chars + 1)
+        if cut <= 0:
+            cut = max_chars
+        pieces.append(piece[:cut].strip())
+        piece = piece[cut:].strip()
+    return [*pieces, piece] if piece else pieces
 
 
-_MERGE_THRESHOLD_RATIO = 0.5
-_MERGE_CEILING_RATIO = 1.5
+def _speakable(piece: str) -> bool:
+    """Whether a piece has a letter or digit. One without (a stray closing
+    quote, a "* * *" separator) gives an engine nothing to say."""
+    return any(ch.isalnum() for ch in piece)
 
 
-def _merge_short(pieces: list[str], max_chars: int) -> list[str]:
-    threshold = max_chars * _MERGE_THRESHOLD_RATIO
-    ceiling = max_chars * _MERGE_CEILING_RATIO
-    merged: list[str] = []
-    i = 0
-    n = len(pieces)
-    while i < n:
-        current = pieces[i]
-        if (
-            len(current) < threshold
-            and i + 1 < n
-            and len(current) + 1 + len(pieces[i + 1]) <= ceiling
-        ):
-            merged.append(f"{current} {pieces[i + 1]}")
-            i += 2
-            continue
-        merged.append(current)
-        i += 1
-    return merged
+def _fill(pieces: list[str], max_chars: int) -> list[str]:
+    clips: list[str] = []
+    for piece in pieces:
+        if clips and len(clips[-1]) + 1 + len(piece) <= max_chars:
+            clips[-1] = f"{clips[-1]} {piece}"
+        else:
+            clips.append(piece)
+    return clips
 
 
 def split_paragraph(paragraph: Paragraph, *, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
-    text = paragraph.text.strip()
-    if not text:
-        return []
-    raw = _raw_sentences(text)
-    cut: list[str] = []
-    for piece in raw:
-        cut.extend(_cut_long(piece, max_chars))
-    return _merge_short(cut, max_chars)
+    pieces = [c for s in _sentences(paragraph.text.strip()) for c in _cut_long(s, max_chars)]
+    return _fill([p for p in pieces if _speakable(p)], max_chars)

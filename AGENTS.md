@@ -21,14 +21,14 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 | `book.py`            | `Book`, `Chapter`, `Paragraph`, `Sentence`, `AudioClip`        |
 | `errors.py`          | `EpubToM4bError`: base for user-facing errors; CLI exit 1      |
 | `epub/`              | ebooklib + BeautifulSoup -> `Book`; TOC/heading chaptering     |
-| `text/`              | Normalisation (per language), sentence split, pipeline hash    |
+| `text/`              | `normalize.py`: NeMo (per language, output used as is); `split.py`: sentence split |
 | `tts/`               | `TTSEngine` ABC, registry, engines, HTTP retry, sidecar, guard |
 | `synth/`             | Clip cache, batching, orchestrator                             |
 | `audio/`             | Chapter assembly, ffmpeg, metadata, VTT                        |
 | `tests/`             | Mirrors `src/`; `tests/helpers.py` shared builders             |
 | `.github/workflows/` | CI + release                                                   |
-| `Makefile`           | `check` / `format` / `coverage` / `ci` targets                 |
-| `pyproject.toml`     | Deps, ruff, mypy, pytest markers + `addopts`                   |
+| `pyproject.toml`     | Deps, pixi workspace + tasks, ruff, mypy, pytest markers + `addopts` |
+| `pixi.lock`          | Locked conda-forge + PyPI environment for every pixi platform  |
 
 ## Conventions
 
@@ -107,12 +107,14 @@ Engine notes:
 
 ```
 <cache_dir>/clips/<engine_fingerprint[:16]>/<sha256(text)[:32]>.flac
+<cache_dir>/nemo/<nemo-text-processing version>/<lang>/*.far
 <out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.flac
 <out_dir>/.work/<book_sha256[:16]>/chapters/<idx:04d>.json
 <out_dir>/.work/<book_sha256[:16]>/encode.json
 ```
 
 - `cache_dir` defaults to `~/.cache/epub-to-m4b`; `E2M_CACHE_DIR` overrides it. Tests must set it to a tmp dir.
+- `nemo/` holds NeMo's compiled grammars, one dir per language, built by the first normalization in that language that finds none. `E2M_NEMO_CACHE_DIR` replaces `<cache_dir>/nemo`; the test session points it at pytest's cache dir and builds the English normalizer once.
 - Clips are shared across books. The chapter work dir is per book and per `out_dir`.
 - `text` is the exact string passed to `engine.synthesize`. Gaps are added at assembly, never baked into a clip.
 - The chapter manifest records engine fingerprint, sample rate, clip keys, gaps, offsets, duration. Any mismatch re-assembles the chapter.
@@ -121,26 +123,26 @@ Engine notes:
 
 ## Tooling
 
-Python 3.14 (`requires-python`, `.python-version`, ruff `py314`, mypy `python_version`).
+Python 3.14 (`requires-python`, pixi `python`, ruff `py314`, mypy `python_version`). [pixi](https://pixi.sh) manages the environment: Python, `pynini`/OpenFst and `editdistance` from conda-forge, everything else from PyPI, the project itself editable; dev tools come from the `dev` feature, part of the default environment.
 
 ```bash
-make check      # ruff check + ruff format --check + mypy --strict + pytest
-make format     # ruff format + ruff check --fix
-make coverage   # pytest --cov --cov-report=term-missing
-make ci         # alias of make check
+pixi install        # create .pixi/envs/default from pixi.lock
+pixi run check      # ruff check + ruff format --check + mypy --strict + pytest
+pixi run format     # ruff format + ruff check --fix
+pixi run coverage   # pytest --cov --cov-report=term-missing
 ```
 
 | pytest marker | Meaning                                  | Run with                   |
 |---------------|------------------------------------------|----------------------------|
-| `sidecar`     | Needs a running local TTS sidecar server | `uv run pytest -m sidecar` |
-| `network`     | Hits a paid API                          | `uv run pytest -m network` |
+| `sidecar`     | Needs a running local TTS sidecar server | `pixi run pytest -m sidecar` |
+| `network`     | Hits a paid API                          | `pixi run pytest -m network` |
 
 Both markers are excluded via `addopts`; no test carries either. The suite runs on `silence`/`tone` and `httpx.MockTransport`.
 
 | Workflow                                | Trigger                     | Does                                                                                   |
 |-----------------------------------------|-----------------------------|----------------------------------------------------------------------------------------|
-| `.github/workflows/ci.yml`              | push to `main`, PR          | `make check`, `uv build`, runs the built wheel with `--version`                        |
-| `.github/workflows/release.yml`         | push to `main`; `workflow_dispatch` with `tag` | `release-please` job opens/updates the release PR from Conventional Commits and, on merge, tags `vX.Y.Z` + creates a GitHub Release; `publish` job then `uv build`s at that tag and uploads to PyPI via Trusted Publishing (OIDC, environment `pypi`). Versions in `.release-please-manifest.json`, config in `release-please-config.json` |
+| `.github/workflows/ci.yml`              | push to `main`, PR          | `pixi run check`, `pixi exec hatch build`, installs the built wheel with pip over conda-forge `pynini` and runs `--version` |
+| `.github/workflows/release.yml`         | push to `main`; `workflow_dispatch` with `tag` | `release-please` job opens/updates the release PR from Conventional Commits and, on merge, tags `vX.Y.Z` + creates a GitHub Release; `publish` job then builds with `pixi exec hatch build` at that tag and uploads to PyPI via Trusted Publishing (OIDC, environment `pypi`). Versions in `.release-please-manifest.json`, config in `release-please-config.json` |
 
 ## Tunables
 

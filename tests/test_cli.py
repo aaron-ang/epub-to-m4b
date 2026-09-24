@@ -47,6 +47,26 @@ def test_dump_text_single_chapter(tiny_epub: Path, capsys: pytest.CaptureFixture
     assert "Chapter One" not in out
 
 
+def test_dump_text_normalized_prints_each_paragraph_normalized_in_one_call(
+    tiny_epub: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_normalize_all(texts: list[str]) -> list[str]:
+        calls.append(texts)
+        return [f"<{i}>" for i in range(len(texts))]
+
+    monkeypatch.setattr("epub_to_m4b.cli.normalize_all", fake_normalize_all)
+    assert main(["dump-text", str(tiny_epub), "--normalized"]) == 0
+    printed = [
+        line.removeprefix("# ")
+        for line in capsys.readouterr().out.splitlines()
+        if line and not line.startswith("===")
+    ]
+    assert len(calls) == 1
+    assert printed == [f"<{i}>" for i in range(len(calls[0]))]
+
+
 def test_dump_text_bad_chapter(tiny_epub: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["dump-text", str(tiny_epub), "--chapter", "9"]) == 1
     assert "out of range" in capsys.readouterr().err

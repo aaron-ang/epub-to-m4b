@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag, XMLParsedAsHTMLWarning
 from bs4.element import PageElement
 
 from epub_to_m4b.book import Paragraph, ParagraphKind
+from epub_to_m4b.epub.chapters import NOTE_LIST_TYPES
 
 HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4"})
 BODY_TAGS = frozenset({"p", "li", "blockquote", "dd", "dt", "figcaption"})
@@ -19,7 +20,11 @@ CONTAINER_TAGS = frozenset(
 )
 BLOCK_TAGS = HEADING_TAGS | BODY_TAGS | CONTAINER_TAGS | {"table", "br", "hr"}
 DROP_TAGS = frozenset({"script", "style", "nav", "img", "svg", "head", "title", "video", "audio"})
-_NOTE_TYPES = frozenset({"footnote", "endnote", "rearnote", "note"})
+# Structural semantics (epub:type, or DPUB-ARIA role minus its "doc-" prefix) of
+# notes, note and source lists, and the links between a note and its reference.
+# Elements carrying any of them are never read aloud.
+_NOTE_TYPES = NOTE_LIST_TYPES | {"footnote", "endnote", "rearnote", "note", "noteref", "backlink"}
+_ROLE_PREFIX = "doc-"
 
 # Short paragraphs that read as chapter/part labels but were marked up as plain <p>.
 _NUMBER_WORDS = (
@@ -36,7 +41,7 @@ _LABEL_MAX_CHARS = 80
 
 
 def parse_document(xhtml: bytes | str) -> tuple[list[Paragraph], frozenset[str]]:
-    """Return the document's paragraphs and the epub:type tokens on body/section elements."""
+    """Return the document's paragraphs and the semantic types on body/section elements."""
     soup = _soup(xhtml)
     root: Tag = soup.body or soup
     epub_types = _epub_types(soup)
@@ -57,8 +62,15 @@ def _epub_types(soup: BeautifulSoup) -> frozenset[str]:
     found: set[str] = set()
     for el in soup.find_all(["body", "section"]):
         if isinstance(el, Tag):
-            found.update(_attr(el, "epub:type").lower().split())
+            found.update(_semantic_types(el))
     return frozenset(found)
+
+
+def _semantic_types(tag: Tag) -> set[str]:
+    """epub:type tokens plus DPUB-ARIA roles with "doc-" removed ("doc-endnotes" -> "endnotes")."""
+    types = set(_attr(tag, "epub:type").lower().split())
+    types.update(r.removeprefix(_ROLE_PREFIX) for r in _attr(tag, "role").lower().split())
+    return types
 
 
 def _attr(tag: Tag, name: str) -> str:
@@ -82,11 +94,9 @@ def _should_drop(tag: Tag) -> bool:
     name = tag.name.lower()
     if name in DROP_TAGS:
         return True
-    classes = _attr(tag, "class").lower()
-    epub_type = _attr(tag, "epub:type").lower().split()
-    if name in {"sup", "a"} and ("noteref" in classes or "noteref" in epub_type):
+    if _NOTE_TYPES.intersection(_semantic_types(tag)):
         return True
-    if name == "aside" and _NOTE_TYPES.intersection(epub_type):
+    if name in {"sup", "a"} and "noteref" in _attr(tag, "class").lower():
         return True
     return name == "figure" and not any(
         fc.get_text(strip=True) for fc in tag.find_all("figcaption")

@@ -130,6 +130,29 @@ def test_front_matter_labels_dropped_without_epub_types() -> None:
     assert titles(build_chapters(docs, entries, "Book")) == ["One"]
 
 
+def test_note_and_source_list_labels_dropped_without_epub_types() -> None:
+    docs = [doc("a", LONG), doc("n", LONG), doc("r", LONG), doc("s", LONG), doc("b", LONG)]
+    entries = toc(
+        ("One", "a.xhtml"),
+        ("Notes", "n.xhtml"),
+        ("References", "r.xhtml"),
+        ("Sources", "s.xhtml"),
+        ("About the Author", "b.xhtml"),
+    )
+    chapters = build_chapters(docs, entries, "Book")
+    assert titles(chapters) == ["One", "About the Author"]
+    assert [c.source_ids for c in chapters] == [("a",), ("b",)]
+
+
+def test_doc_left_empty_by_note_list_semantics_excluded() -> None:
+    # epub/html.py already dropped the note list; only its heading is left.
+    notes = doc("n", ("Notes", H), types=frozenset({"endnotes"}))
+    mixed = doc("m", ("Two", H), LONG, types=frozenset({"endnotes"}))
+    chapters = build_chapters([doc("a", LONG), notes, mixed], [], "Book")
+    assert titles(chapters) == ["Sentence of narration that carries the story forward.", "Two"]
+    assert [c.source_ids for c in chapters] == [("a",), ("m",)]
+
+
 def test_bare_number_and_truncated_labels_fold_into_previous() -> None:
     docs = [doc("a", LONG), doc("s1", LONG), doc("s2", LONG), doc("q", LONG), doc("b", LONG)]
     entries = toc(

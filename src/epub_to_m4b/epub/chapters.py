@@ -31,6 +31,10 @@ EXCLUDED_TYPES = frozenset(
         "backmatter",
     }
 )
+# epub:type tokens of note and source lists. epub/html.py drops their elements
+# from the text; a document they leave with no body text is excluded whole, so
+# its remaining heading does not become a chapter.
+NOTE_LIST_TYPES = frozenset({"footnotes", "endnotes", "rearnotes", "bibliography"})
 # A document carrying one of these is read even if it also carries an excluded token
 # (publishers often tag "frontmatter preface").
 KEPT_TYPES = frozenset(
@@ -48,7 +52,8 @@ KEPT_TYPES = frozenset(
         "appendix",
     }
 )
-# TOC labels for front/back matter in books that carry no epub:type at all.
+# TOC labels for front/back matter (including note and source lists) in books that
+# carry no epub:type at all.
 EXCLUDED_LABELS = frozenset(
     {
         "cover",
@@ -65,6 +70,11 @@ EXCLUDED_LABELS = frozenset(
         "newsletter sign-up",
         "begin reading",
         "dedication",
+        "notes",
+        "endnotes",
+        "references",
+        "bibliography",
+        "sources",
     }
 )
 MIN_TOC_COVERAGE = 0.30
@@ -162,6 +172,8 @@ def build_chapters(
 
 
 def is_excluded_doc(doc: SpineDoc) -> bool:
+    if doc.epub_types & NOTE_LIST_TYPES and doc.body_chars == 0:
+        return True
     return bool(doc.epub_types & EXCLUDED_TYPES) and not (doc.epub_types & KEPT_TYPES)
 
 

@@ -127,3 +127,50 @@ def test_bytes_input_and_xml_declaration() -> None:
 def test_no_break_tokens_ever() -> None:
     text = " ".join(t for t, _ in paras("<p>a<br/>b</p><div>c</div><h2>d</h2>"))
     assert "[break]" not in text and "[pause]" not in text
+
+
+def test_note_semantics_dropped_on_any_element() -> None:
+    html = (
+        "<p>Body<a role='doc-noteref' href='#n1'>[a]</a> text.</p>"
+        "<div epub:type='footnotes'><p><a href='#r1'>*</a> Footnote.</p></div>"
+        "<section role='doc-endnotes'><p>Endnote.</p></section>"
+        "<section epub:type='bibliography'><p>Source.</p></section>"
+        "<p><span epub:type='backlink'>Back</span>Kept.</p>"
+    )
+    assert paras(html) == [("Body text.", B), ("Kept.", B)]
+
+
+def test_fragment_link_with_note_label_kept() -> None:
+    html = (
+        "<p>Tilly's,<sup><a href='#afn2' id='ftn2'>2</a></sup> in which.</p>"
+        "<p>\"what if.\"<a href='#itr-ftn1'><sup>*</sup></a> It is.</p>"
+        "<p><a href='notes.xhtml#n1'>1.</a> Note text.</p>"
+        "<p>See chapters <a href='c04.xhtml'>4</a> and <a href='#s5'>section five</a>.</p>"
+    )
+    assert paras(html) == [
+        ("Tilly's,2 in which.", B),
+        ('"what if."* It is.', B),
+        ("1. Note text.", B),
+        ("See chapters 4 and section five.", B),
+    ]
+
+
+def test_link_showing_its_own_address_kept() -> None:
+    html = (
+        "<p>Listen: <a href='http://youtube.com/watch?v=x1'>youtube.com/\u200bwatch?v=x1</a>.</p>"
+        "<p><a href='http://www.moveon.org'>MoveOn.org</a>, the movement.</p>"
+        "<p><a href='https://example.com/a'>this page</a> here.</p>"
+    )
+    assert paras(html) == [
+        ("Listen: youtube.com/\u200bwatch?v=x1.", B),
+        ("MoveOn.org, the movement.", B),
+        ("this page here.", B),
+    ]
+
+
+def test_role_semantics_extracted_without_doc_prefix() -> None:
+    doc = (
+        "<html><body role='doc-endnotes'>"
+        "<section role='doc-chapter'><p>x</p></section></body></html>"
+    )
+    assert parse_document(doc)[1] == frozenset({"endnotes", "chapter"})

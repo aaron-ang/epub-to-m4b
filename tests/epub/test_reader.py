@@ -105,14 +105,14 @@ def _build_noted_epub(path: Path) -> Path:
 
 def test_note_and_reference_chapters_are_excluded(tmp_path: Path) -> None:
     # notes.xhtml and refs.xhtml are dropped as chapters (structural exclusion);
-    # nothing in ch1's own text is stripped: a note-ref link, a bracketed
-    # marker, and a URL are all narrated as NeMo renders them.
+    # in ch1's own text only the bare bracketed marker is stripped; a note-ref
+    # link without note semantics and a URL are narrated as NeMo renders them.
     book = read_book(_build_noted_epub(tmp_path / "noted.epub"))
     assert [c.title for c in book.chapters] == ["One"]
     assert book.chapters[0].source_ids == ("ch1",)
     sentences = [s.text for s in book_to_sentences(book)[0]]
     assert sentences[-3:] == [
         "The narrator reads this sentence aloud to the listener.one",
-        "Wealth is assets that earn while you sleep. [seventy eight]",
+        "Wealth is assets that earn while you sleep.",
         "See HTTPS colon slash slash fs dot BLOG slash NAVAL-ravikant slash for more.",
     ]

@@ -174,3 +174,14 @@ def test_role_semantics_extracted_without_doc_prefix() -> None:
         "<section role='doc-chapter'><p>x</p></section></body></html>"
     )
     assert parse_document(doc)[1] == frozenset({"endnotes", "chapter"})
+
+
+def test_bare_note_markers_dropped() -> None:
+    assert paras("<p>It is a skill set. [78]</p><p>[8]</p><p>Mid [4] text<sup>[12]</sup>.</p>") == [
+        ("It is a skill set.", B),
+        ("Mid text.", B),
+    ]
+
+
+def test_bracketed_words_and_long_numbers_kept() -> None:
+    assert paras("<p>Quote [sic] from [2024].</p>") == [("Quote [sic] from [2024].", B)]

@@ -38,6 +38,10 @@ _LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _LABEL_MAX_CHARS = 80
+# Bare-text note references ("...develop. [78]") left over when a converter
+# flattened the noteref link; spoken they are noise ("seventy eight"), and a
+# paragraph holding nothing else would be synthesized on its own.
+_NOTE_MARKER_RE = re.compile(r"\s*\[\d{1,3}\]")
 
 
 def parse_document(xhtml: bytes | str) -> tuple[list[Paragraph], frozenset[str]]:
@@ -87,7 +91,7 @@ def _promote_label(p: Paragraph) -> Paragraph:
 
 
 def _collapse(text: str) -> str:
-    return " ".join(text.replace("\xa0", " ").split())
+    return " ".join(_NOTE_MARKER_RE.sub("", text.replace("\xa0", " ")).split())
 
 
 def _should_drop(tag: Tag) -> bool:

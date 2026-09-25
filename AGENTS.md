@@ -68,8 +68,11 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 | `sample_rate: int`                                  | attribute        | Output sample rate of every clip                               |
 | `max_batch: int = 1`                                | attribute        | Texts per `synthesize()` call                                  |
 | `max_concurrency: int = 1`                          | attribute        | Parallel `synthesize()` calls; `> 1` fans out over a thread pool |
+| `retries: int = 0`                                  | attribute        | Reseeds per clip `clip_miss` rejects; `0` disables retries     |
 | `synthesize(texts: Sequence[str]) -> list[AudioClip]` | abstract method | One clip per input text, same order                            |
 | `fingerprint() -> str`                              | abstract method  | Digest of engine + model + voice + params; clip cache partition |
+| `clip_miss(text, clip, *, capped) -> float`         | method           | Distance from plausible speech; `0.0` keeps the clip, `inf` if a capped request may have stopped it mid-word |
+| `resynthesize(texts, retry_round, *, capped) -> list[AudioClip]` | method | Fresh takes for retry round 1, 2, ...; `synth/retry.py` queues rejected clips and sends them in full `max_batch` batches (the rest after the first pass), capped, plus one uncapped round for a text whose every take hit the cap |
 | `close() -> None`                                   | method           | Release resources; `__exit__` calls it                         |
 
 | Engine       | Config table          | `max_batch`   | `max_concurrency` |
@@ -91,7 +94,7 @@ Engine notes:
 
 | Engine                             | Notes                                                                                                                                          |
 |------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `breeze`                           | Model is the last `command` arg (local dir or HF repo id, resolved by breeze-tts); server started with `breeze-tts-server`; `GET /v1/model` reports `frame_rate`, `model_digest`, `max_new_tokens`, `max_batch_texts` (`ServerInfo`; 404 or bad field = wrong server); fingerprint uses `model_digest` + reference wav hash; token cap from `frame_rate`, clamped to `max_new_tokens`; runaway guard from `tts/guard.py` via `RunawayPolicy`; 409 busy-wait via `SidecarPolicy` |
+| `breeze`                           | Model is the last `command` arg (local dir or HF repo id, resolved by breeze-tts); server started with `breeze-tts-server`; `GET /v1/model` reports `frame_rate`, `model_digest`, `max_new_tokens`, `max_batch_texts` (`ServerInfo`; 404 or bad field = wrong server); fingerprint uses `model_digest` + reference wav hash; first-pass token cap from `frame_rate`, clamped to `max_new_tokens`, `resynthesize` uses seed + round, capped like the first pass unless `capped=False`; `clip_miss` is the duration window (never cuts) from `tts/guard.py` via `RunawayPolicy`; 409 busy-wait via `SidecarPolicy` |
 | `openai`, `elevenlabs`, `deepgram` | `tts/http.py` retry                                                                                                                            |
 | `silence`, `tone`                  | none                                                                                                                                           |
 
@@ -164,8 +167,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |
 | `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size (clamped to server `max_batch_texts`) |
 | `_SIDECAR_ENV` | `tts/breeze.py` | Env vars the Breeze server child gets when spawned (`TRITON_PTXAS_PATH`) |
-| `RunawayPolicy` defaults | `tts/guard.py` | Retry limit (base + per-char seconds), token cap slack over it (also the cut limit), reseed attempts |
-| `FADE_SECONDS` | `tts/guard.py` | Fade-out applied to a truncated clip |
+| `RunawayPolicy` defaults | `tts/guard.py` | Retry limit (base + per-char seconds), short limit (per-char floor above `min_chars`), first-pass token cap slack, reseed attempts |
 | `SidecarPolicy` defaults | `tts/sidecar.py` | Health/poll/startup/terminate timeouts, single-request and batch timeouts, busy status + total busy wait + retry spacing |
 
 ## Reference material

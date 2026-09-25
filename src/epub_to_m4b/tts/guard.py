@@ -1,49 +1,51 @@
-"""Pure runaway-clip budget math: retry limit, batch cap, cut+fade.
+"""Pure runaway-clip budget math: duration window, batch cap, clip scoring.
 
 No HTTP or subprocess here - this is the arithmetic that decides whether a
-synthesized clip is plausibly real speech, worth a reseed, or bad enough to
-truncate. Keeping it pure (plain floats/arrays in, plain floats/arrays out)
-is what makes it exhaustively testable without a GPU or a running sidecar;
-``tts/breeze.py`` wires it to HTTP retries.
+synthesized clip is plausibly real speech or worth a reseed. Keeping it pure
+(plain floats/arrays in, plain floats/arrays out) is what makes it
+exhaustively testable without a GPU or a running sidecar; ``tts/breeze.py``
+wires it to HTTP and ``synth/retry.py`` batches the reseeds. Nothing here
+ever truncates audio: every clip that reaches the book is one the model
+finished on its own.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-
-import numpy as np
-import numpy.typing as npt
 
 from epub_to_m4b.book import AudioClip
 
 
 @dataclass(frozen=True)
 class RunawayPolicy:
-    """Duration budget that decides whether a clip is real speech or a runaway.
+    """Duration window that decides whether a clip is real speech.
 
     A clip over its retry limit (fixed lead-in plus a per-character
-    allowance) is reseeded up to ``retries`` times. The server-side token cap
-    is the batch's longest retry limit times ``cap_slack``: every clip in a
-    batch decodes in lockstep, so one runaway holds the whole batch until the
-    cap, and keeping it just above the retry limit bounds that stall. A clip
-    stopped by the cap is over its retry limit, so it is reseeded; a survivor
-    still longer than the cap is cut there and faded, so it never ends
-    mid-word.
+    allowance) ran away; a clip of at least ``min_chars`` characters under
+    ``min_seconds_per_char`` per character stopped early and dropped words.
+    Either is reseeded up to ``retries`` times, in full batches queued by
+    ``synth/retry.py``. The first pass's server-side
+    token cap is the batch's longest retry limit times ``cap_slack``: every
+    clip in a batch decodes in lockstep, so one runaway holds the whole batch
+    until the cap, and keeping it just above the retry limit bounds that
+    stall. Reseeds get the same cap. Real speech never reaches its retry
+    limit (the longest verified clip in a whole book came to 0.98 of it), so
+    a clip stopped by the cap is babble: it scores infinite and loses to any
+    complete take. Only a text whose every take hit the cap gets one last
+    uncapped reseed, so the kept clip is never one the cap truncated.
     """
 
     base_seconds: float = 2.0
     seconds_per_char: float = 0.10
+    min_seconds_per_char: float = 0.045
+    min_chars: int = 20
     cap_slack: float = 1.25
     retries: int = 2
 
 
 DEFAULT_RUNAWAY_POLICY = RunawayPolicy()
-
-# Fade-out on a cut clip: long enough to avoid an audible click, short
-# enough not to swallow the last syllable.
-FADE_SECONDS = 0.02
 
 
 def retry_limit_seconds(text: str, policy: RunawayPolicy) -> float:
@@ -51,12 +53,29 @@ def retry_limit_seconds(text: str, policy: RunawayPolicy) -> float:
     return policy.base_seconds + policy.seconds_per_char * len(text)
 
 
+def short_limit_seconds(text: str, policy: RunawayPolicy) -> float:
+    """A clip shorter than this is retried with a fresh seed.
+
+    Zero below ``min_chars``: a few words have too little text for their
+    length to say anything about dropped speech.
+    """
+    if len(text) < policy.min_chars:
+        return 0.0
+    return policy.min_seconds_per_char * len(text)
+
+
+def window_miss_seconds(clip: AudioClip, text: str, policy: RunawayPolicy) -> float:
+    """How far ``clip`` falls outside its duration window; 0.0 inside it."""
+    short = short_limit_seconds(text, policy)
+    long = retry_limit_seconds(text, policy)
+    return max(short - clip.seconds, clip.seconds - long, 0.0)
+
+
 def cap_seconds(texts: Sequence[str], policy: RunawayPolicy) -> float:
-    """Server-side generation cap for a batch, in seconds of audio.
+    """First-pass server-side generation cap for a batch, in seconds of audio.
 
     Sized off the batch's longest text so one runaway doesn't stall the
-    others past its own budget. Also the cut limit: a clip still over its
-    retry limit after reseeding is truncated here.
+    others past its own budget.
     """
     return max(retry_limit_seconds(text, policy) for text in texts) * policy.cap_slack
 
@@ -66,83 +85,13 @@ def max_new_tokens(texts: Sequence[str], policy: RunawayPolicy, frame_rate: floa
     return math.ceil(cap_seconds(texts, policy) * frame_rate)
 
 
-def cut_and_fade(
-    samples: npt.NDArray[np.float32], sample_rate: int, limit_seconds: float
-) -> npt.NDArray[np.float32]:
-    """Truncate to ``limit_seconds`` with a linear fade-out so the cut isn't a click."""
-    cut = samples[: int(limit_seconds * sample_rate)].copy()
-    fade_samples = min(len(cut), int(FADE_SECONDS * sample_rate))
-    if fade_samples:
-        cut[-fade_samples:] *= np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)
-    return cut
+def clip_miss_seconds(clip: AudioClip, text: str, policy: RunawayPolicy, *, capped: bool) -> float:
+    """Score ``clip`` for the retry queue: 0.0 keeps it, lower is better.
 
-
-def apply_guard(
-    clips: Sequence[AudioClip],
-    texts: Sequence[str],
-    reseed_fn: Callable[[Sequence[str], int], list[AudioClip]],
-    policy: RunawayPolicy = DEFAULT_RUNAWAY_POLICY,
-    *,
-    max_cap_seconds: float = math.inf,
-) -> tuple[list[AudioClip], list[str]]:
-    """Retry runaway clips with fresh seeds, then cut+fade anything still too long.
-
-    Reseeding is batched: ``reseed_fn(texts, attempt)`` is called once per
-    ``attempt`` in ``1..policy.retries`` with only the texts whose best clip
-    so far is still over the retry limit, and must return one clip per text
-    in the same order. The caller's closure decides what the attempt number
-    means as an actual seed. For each text the shortest candidate seen wins,
-    and a text leaves the retry set once its best is under the limit; the
-    loop stops early when the set empties. One round trip per attempt for the
-    whole batch is what keeps several runaways from each paying the full
-    fixed cost of a separate request.
-
-    A text still over its retry limit afterwards is cut and faded to the
-    batch's ``cap_seconds`` if longer than it, else kept as a slow clip.
-    ``max_cap_seconds`` is the server's own ceiling on that cap, for a server
-    that clamps the requested token count.
-
-    Returns the guarded clips alongside human-readable notes for anything
-    that needed a retry or a cut - diagnostic signal a real user would want,
-    not silently swallowed.
+    The batch cap sits above every text's retry limit, so a capped clip over
+    its retry limit may be the one the cap stopped mid-word: it scores
+    infinite and any complete take replaces it.
     """
-    if len(clips) != len(texts):
-        raise ValueError(f"got {len(clips)} clips for {len(texts)} texts")
-
-    best = list(clips)
-    limits = [retry_limit_seconds(text, policy) for text in texts]
-    runaway = [i for i, clip in enumerate(clips) if clip.seconds > limits[i]]
-    flagged = list(runaway)
-
-    for attempt in range(1, policy.retries + 1):
-        if not runaway:
-            break
-        candidates = reseed_fn([texts[i] for i in runaway], attempt)
-        if len(candidates) != len(runaway):
-            raise ValueError(f"reseed returned {len(candidates)} clips for {len(runaway)} texts")
-        for i, candidate in zip(runaway, candidates, strict=True):
-            if candidate.seconds < best[i].seconds:
-                best[i] = candidate
-        runaway = [i for i in runaway if best[i].seconds > limits[i]]
-
-    notes: list[str] = []
-    cut_limit = min(cap_seconds(texts, policy), max_cap_seconds) if flagged else 0.0
-    for i in flagged:
-        text = texts[i]
-        clip = best[i]
-        if clip.seconds > cut_limit:
-            cut_samples = cut_and_fade(clip.samples, clip.sample_rate, cut_limit)
-            best[i] = AudioClip(samples=cut_samples, sample_rate=clip.sample_rate)
-            notes.append(
-                f"runaway clip cut to {cut_limit:.1f}s after {policy.retries} retries: "
-                f"{text[:60]!r}"
-            )
-        elif clip.seconds > limits[i]:
-            notes.append(
-                f"slow clip kept at {clip.seconds:.1f}s after {policy.retries} retries: "
-                f"{text[:60]!r}"
-            )
-        else:
-            notes.append(f"runaway clip recovered with a reseed: {text[:60]!r}")
-
-    return best, notes
+    if capped and clip.seconds > retry_limit_seconds(text, policy):
+        return math.inf
+    return window_miss_seconds(clip, text, policy)

@@ -50,9 +50,32 @@ class TTSEngine(ABC):
     sample_rate: int
     max_batch: int = 1
     max_concurrency: int = 1
+    # Reseeds allowed per clip that ``clip_miss`` rejects; 0 disables retries.
+    retries: int = 0
 
     @abstractmethod
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]: ...
+
+    def clip_miss(self, text: str, clip: AudioClip, *, capped: bool) -> float:
+        """How far ``clip`` falls from plausible speech for ``text``; 0.0 keeps it.
+
+        ``capped`` marks a clip from a request with a generation cap
+        (``synthesize``, or ``resynthesize`` with ``capped=True``); a clip the
+        cap may have stopped mid-word should score ``math.inf``. Only
+        consulted when ``retries`` is above zero.
+        """
+        return 0.0
+
+    def resynthesize(
+        self, texts: Sequence[str], retry_round: int, *, capped: bool
+    ) -> list[AudioClip]:
+        """Fresh takes of ``texts`` for retry round ``retry_round`` (1, 2, ...).
+
+        Each round must draw differently from the first pass and from every
+        other round. ``capped=False`` lifts the generation cap so no take is
+        stopped early. Only called when ``retries`` is above zero.
+        """
+        raise NotImplementedError(f"{self.name} does not retry clips")
 
     @abstractmethod
     def fingerprint(self) -> str: ...

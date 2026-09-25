@@ -27,6 +27,7 @@ from epub_to_m4b.book import AudioClip, Book, Paragraph, ParagraphKind, Sentence
 from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.batching import PendingClip, make_batches
+from epub_to_m4b.synth.retry import RetryQueue, Settled
 from epub_to_m4b.text.normalize import normalize_all
 from epub_to_m4b.text.split import CLOSERS, split_paragraph
 from epub_to_m4b.tts.base import TTSEngine
@@ -243,6 +244,11 @@ def _synthesize_pending(
     clip cache the moment it comes back - so a crash partway through only
     ever costs the in-flight batches' work.
 
+    A clip the engine rejects (``clip_miss``) is held in a ``RetryQueue``
+    rather than stored, and reseeded once ``max_batch`` of them have piled
+    up, or in a final partial batch after the first pass - so retries run as
+    full batches, and a crash costs the queued clips' work too.
+
     Engines that allow it (``max_concurrency`` above one - the hosted APIs)
     get their batches fanned out over a thread pool; results are stored as
     each finishes, in whatever order that is, since every clip travels with
@@ -250,30 +256,45 @@ def _synthesize_pending(
     loop with no threads involved.
     """
     batches = make_batches(pending, engine.max_batch)
+    retry = RetryQueue(engine)
     done = 0
 
-    def store(n: int, batch: Sequence[PendingClip], clips: Sequence[AudioClip]) -> None:
+    def keep(settled: Sequence[Settled]) -> None:
         nonlocal done
-        for item, clip in zip(batch, clips, strict=True):
-            cache.store_clip(cache_dir, engine_fingerprint, item.key, clip)
-        done += len(batch)
-        log(f"batch {n}/{len(batches)}, {done}/{len(pending)} clips")
+        for item in settled:
+            cache.store_clip(cache_dir, engine_fingerprint, item.item.key, item.clip)
+            if item.note:
+                log(f"{engine.name}: {item.note}")
+        done += len(settled)
+
+    def store(n: int, batch: Sequence[PendingClip], clips: Sequence[AudioClip]) -> None:
+        offered = (retry.offer(item, clip) for item, clip in zip(batch, clips, strict=True))
+        keep([settled for settled in offered if settled is not None])
+        keep(retry.flush(final=False))
+        queued = f", {len(retry)} queued for retry" if len(retry) else ""
+        log(f"batch {n}/{len(batches)}, {done}/{len(pending)} clips{queued}")
 
     if engine.max_concurrency <= 1:
         for n, batch in enumerate(batches, start=1):
             store(n, batch, _synthesize_batch(engine, batch))
-        return
+    else:
+        with ThreadPoolExecutor(max_workers=engine.max_concurrency) as executor:
+            futures = {
+                executor.submit(_synthesize_batch, engine, batch): batch for batch in batches
+            }
+            try:
+                for n, future in enumerate(as_completed(futures), start=1):
+                    store(n, futures[future], future.result())
+            except BaseException:
+                # Drop the batches still queued so the failure surfaces now
+                # rather than after the whole pool drains.
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
 
-    with ThreadPoolExecutor(max_workers=engine.max_concurrency) as executor:
-        futures = {executor.submit(_synthesize_batch, engine, batch): batch for batch in batches}
-        try:
-            for n, future in enumerate(as_completed(futures), start=1):
-                store(n, futures[future], future.result())
-        except BaseException:
-            # Drop the batches still queued so the failure surfaces now
-            # rather than after the whole pool drains.
-            executor.shutdown(wait=False, cancel_futures=True)
-            raise
+    if len(retry):
+        log(f"retrying the last {len(retry)} queued clips")
+        keep(retry.flush(final=True))
+        log(f"retries done, {done}/{len(pending)} clips")
 
 
 def _cues(

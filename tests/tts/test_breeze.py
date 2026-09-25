@@ -3,7 +3,6 @@ from __future__ import annotations
 import email
 import json
 import logging
-import math
 import subprocess
 from collections.abc import Callable
 from email.message import Message
@@ -14,6 +13,7 @@ import httpx
 import numpy as np
 import pytest
 
+from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.breeze import BreezeConfig, BreezeEngine
 from epub_to_m4b.tts.http import TTSError
@@ -320,152 +320,6 @@ def test_segment_count_mismatch_raises_clear_error(tmp_path: Path) -> None:
     engine.close()
 
 
-def test_too_long_clip_gets_routed_through_guard(tmp_path: Path) -> None:
-    text = "a runaway sentence"
-    retry_limit = _retry_limit(text)
-    runaway_seconds = retry_limit + 5.0
-    recovered_seconds = retry_limit - 0.5
-    batch_calls: list[tuple[list[str], int]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/health":
-            return _health_response()
-        if request.url.path == "/v1/audio/speech":
-            return httpx.Response(
-                200,
-                content=_pcm_bytes(1.0),
-                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
-            )
-        if request.url.path == "/v1/audio/speech/batch":
-            fields = _parse_multipart(request)
-            texts = json.loads(fields["texts"])
-            seed = int(fields["seed"])
-            batch_calls.append((texts, seed))
-            # the original batched call runs away; the reseed comes back short
-            seconds = runaway_seconds if seed == config.seed else recovered_seconds
-            segments = [_pcm_bytes(seconds) for _ in texts]
-            return httpx.Response(
-                200,
-                content=b"".join(segments),
-                headers={
-                    "X-Segment-Bytes": ",".join(str(len(s)) for s in segments),
-                    "X-Sample-Rate": str(_SAMPLE_RATE),
-                },
-            )
-        raise AssertionError(f"unexpected path {request.url.path}")
-
-    transport = _mock_transport(handler)
-    config = _config(tmp_path)
-    engine = BreezeEngine(config, transport=transport)
-
-    (clip,) = engine.synthesize([text])
-    engine.close()
-
-    assert clip.seconds <= retry_limit + 0.01
-    assert batch_calls == [([text], config.seed), ([text], config.seed + 1)]
-
-
-def test_several_runaways_reseed_as_one_post_per_attempt(tmp_path: Path) -> None:
-    ok, run_a, run_b = "fine", "runaway alpha", "runaway beta"
-    limit = min(_retry_limit(run_a), _retry_limit(run_b))
-    batch_calls: list[tuple[list[str], int]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/health":
-            return _health_response()
-        if request.url.path == "/v1/audio/speech":
-            return httpx.Response(
-                200,
-                content=_pcm_bytes(1.0),
-                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
-            )
-        if request.url.path == "/v1/audio/speech/batch":
-            fields = _parse_multipart(request)
-            texts = json.loads(fields["texts"])
-            seed = int(fields["seed"])
-            batch_calls.append((texts, seed))
-            if seed == config.seed:
-                segments = [_pcm_bytes(0.1 if t == ok else limit + 5.0) for t in texts]
-            else:
-                segments = [_pcm_bytes(limit - 0.5) for _ in texts]
-            return httpx.Response(
-                200,
-                content=b"".join(segments),
-                headers={
-                    "X-Segment-Bytes": ",".join(str(len(s)) for s in segments),
-                    "X-Sample-Rate": str(_SAMPLE_RATE),
-                },
-            )
-        raise AssertionError(f"unexpected path {request.url.path}")
-
-    transport = _mock_transport(handler)
-    config = _config(tmp_path)
-    engine = BreezeEngine(config, transport=transport)
-
-    clips = engine.synthesize([ok, run_a, run_b])
-    engine.close()
-
-    # one original POST, then exactly one reseed POST carrying both runaways
-    assert batch_calls == [
-        ([ok, run_a, run_b], config.seed),
-        ([run_a, run_b], config.seed + 1),
-    ]
-    assert clips[0].seconds <= 0.11
-    assert clips[1].seconds <= _retry_limit(run_a)
-    assert clips[2].seconds <= _retry_limit(run_b)
-
-
-def test_runaways_still_over_limit_get_second_attempt_post(tmp_path: Path) -> None:
-    run_a, run_b = "runaway alpha", "runaway beta"
-    limit = min(_retry_limit(run_a), _retry_limit(run_b))
-    batch_calls: list[tuple[list[str], int]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/health":
-            return _health_response()
-        if request.url.path == "/v1/audio/speech":
-            return httpx.Response(
-                200,
-                content=_pcm_bytes(1.0),
-                headers={"X-Sample-Rate": str(_SAMPLE_RATE), "X-Sample-Format": "s16le"},
-            )
-        if request.url.path == "/v1/audio/speech/batch":
-            fields = _parse_multipart(request)
-            texts = json.loads(fields["texts"])
-            seed = int(fields["seed"])
-            batch_calls.append((texts, seed))
-            if seed == config.seed + 1:
-                # attempt 1: alpha recovers, beta still runs away
-                segments = [_pcm_bytes(limit - 0.5 if t == run_a else limit + 4.0) for t in texts]
-            elif seed == config.seed + 2:
-                segments = [_pcm_bytes(limit - 0.5) for _ in texts]
-            else:
-                segments = [_pcm_bytes(limit + 5.0) for _ in texts]
-            return httpx.Response(
-                200,
-                content=b"".join(segments),
-                headers={
-                    "X-Segment-Bytes": ",".join(str(len(s)) for s in segments),
-                    "X-Sample-Rate": str(_SAMPLE_RATE),
-                },
-            )
-        raise AssertionError(f"unexpected path {request.url.path}")
-
-    transport = _mock_transport(handler)
-    config = _config(tmp_path)
-    engine = BreezeEngine(config, transport=transport)
-
-    clips = engine.synthesize([run_a, run_b])
-    engine.close()
-
-    assert batch_calls == [
-        ([run_a, run_b], config.seed),
-        ([run_a, run_b], config.seed + 1),
-        ([run_b], config.seed + 2),
-    ]
-    assert all(c.seconds <= _retry_limit(t) for c, t in zip(clips, [run_a, run_b], strict=True))
-
-
 def test_fingerprint_is_stable_and_changes_with_reference_voice(tmp_path: Path) -> None:
     def make_handler(reference_pcm: bytes) -> object:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -628,7 +482,9 @@ def test_token_cap_clamped_to_server_max_new_tokens(
     server_max = wanted // 2
     batch_fields: list[dict[str, str]] = []
     transport = _ready_transport(batch_fields, max_new_tokens=server_max)
-    engine = BreezeEngine(_config(tmp_path, batch_size=1), transport=transport)
+    # The fake server's clips are short for 100 chars; keep the short check out of it.
+    no_short = guard.RunawayPolicy(min_chars=1000)
+    engine = BreezeEngine(_config(tmp_path, batch_size=1), transport=transport, runaway=no_short)
     with caplog.at_level(logging.DEBUG, logger="epub_to_m4b.tts.breeze"):
         engine.synthesize(texts)
     engine.close()
@@ -639,32 +495,64 @@ def test_token_cap_clamped_to_server_max_new_tokens(
     assert clamp_logs[0].levelno == logging.DEBUG
 
 
-def test_clamped_cap_is_the_cut_limit(tmp_path: Path) -> None:
-    text = "c" * 100
-    policy = guard.DEFAULT_RUNAWAY_POLICY
-    between = (_retry_limit(text) + guard.cap_seconds([text], policy)) / 2
-    server_max = math.ceil(between * _FRAME_RATE)
-    server_cap = server_max / _FRAME_RATE
-    assert _retry_limit(text) < server_cap < guard.cap_seconds([text], policy)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/health":
-            return _health_response()
-        if request.url.path == "/v1/audio/speech":
-            return httpx.Response(200, content=_pcm_bytes(1.0))
-        # every attempt runs away, a little past the server's own cap
-        segment = _pcm_bytes(server_cap + 1.0)
-        return httpx.Response(
-            200,
-            content=segment,
-            headers={"X-Segment-Bytes": str(len(segment)), "X-Sample-Rate": str(_SAMPLE_RATE)},
-        )
-
-    transport = _mock_transport(handler, max_new_tokens=server_max)
-    engine = BreezeEngine(_config(tmp_path), transport=transport)
-    (clip,) = engine.synthesize([text])
+def test_synthesize_is_one_capped_first_pass_without_retries(tmp_path: Path) -> None:
+    texts = ["a runaway sentence", "another one"]
+    batch_fields: list[dict[str, str]] = []
+    config = _config(tmp_path)
+    engine = BreezeEngine(config, transport=_ready_transport(batch_fields))
+    engine.synthesize(texts)
     engine.close()
-    assert len(clip.samples) == int(server_cap * _SAMPLE_RATE)
+
+    (fields,) = batch_fields
+    assert json.loads(fields["texts"]) == texts
+    assert int(fields["seed"]) == config.seed
+    assert int(fields["max_new_tokens"]) == guard.max_new_tokens(
+        texts, guard.DEFAULT_RUNAWAY_POLICY, _FRAME_RATE
+    )
+
+
+def test_resynthesize_capped_keeps_first_pass_cap(tmp_path: Path) -> None:
+    texts = ["x" * 100]
+    batch_fields: list[dict[str, str]] = []
+    config = _config(tmp_path)
+    engine = BreezeEngine(config, transport=_ready_transport(batch_fields))
+    engine.resynthesize(texts, 1, capped=True)
+    engine.close()
+
+    (fields,) = batch_fields
+    assert int(fields["seed"]) == config.seed + 1
+    assert int(fields["max_new_tokens"]) == guard.max_new_tokens(
+        texts, guard.DEFAULT_RUNAWAY_POLICY, _FRAME_RATE
+    )
+
+
+def test_resynthesize_uncapped_draws_seed_per_round(tmp_path: Path) -> None:
+    texts = ["x" * 100, "y" * 3]
+    batch_fields: list[dict[str, str]] = []
+    config = _config(tmp_path, batch_size=1)
+    engine = BreezeEngine(config, transport=_ready_transport(batch_fields))
+    clips = engine.resynthesize(texts, 3, capped=False)
+    engine.close()
+
+    assert len(clips) == 2
+    assert [json.loads(f["texts"]) for f in batch_fields] == [[texts[0]], [texts[1]]]
+    assert {int(f["seed"]) for f in batch_fields} == {config.seed + 3}
+    assert {int(f["max_new_tokens"]) for f in batch_fields} == {1500}
+
+
+def test_retry_hooks_follow_runaway_policy(tmp_path: Path) -> None:
+    policy = guard.RunawayPolicy(retries=5)
+    engine = BreezeEngine(_config(tmp_path), transport=_ready_transport(), runaway=policy)
+    text = "a runaway sentence"
+    over = AudioClip(
+        samples=np.zeros(int((_retry_limit(text) + 1.0) * _SAMPLE_RATE), dtype=np.float32),
+        sample_rate=_SAMPLE_RATE,
+    )
+    engine.close()
+
+    assert engine.retries == 5
+    assert engine.clip_miss(text, over, capped=True) == float("inf")
+    assert engine.clip_miss(text, over, capped=False) == pytest.approx(1.0, abs=1e-3)
 
 
 def test_batch_size_clamped_to_server_max_batch_texts(tmp_path: Path) -> None:

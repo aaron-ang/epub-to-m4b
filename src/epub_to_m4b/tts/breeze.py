@@ -189,6 +189,7 @@ class BreezeEngine(TTSEngine):
             # The orchestrator sizes each synthesize() call by max_batch; leaving
             # the ABC default of 1 would feed the GPU one sentence per request.
             self.max_batch = min(self.config.batch_size, self.server.max_batch_texts)
+            self.retries = self.runaway.retries
             self._reference_wav, self._reference_text = self._load_or_create_reference_voice()
         except BaseException:
             self._client.close()
@@ -231,37 +232,38 @@ class BreezeEngine(TTSEngine):
         return ref_wav, _REFERENCE_TEXT
 
     def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
+        return self._synthesize_all(texts, seed=self.config.seed, capped=True)
+
+    def clip_miss(self, text: str, clip: AudioClip, *, capped: bool) -> float:
+        return guard.clip_miss_seconds(clip, text, self.runaway, capped=capped)
+
+    def resynthesize(
+        self, texts: Sequence[str], retry_round: int, *, capped: bool
+    ) -> list[AudioClip]:
+        return self._synthesize_all(texts, seed=self.config.seed + retry_round, capped=capped)
+
+    def _synthesize_all(self, texts: Sequence[str], *, seed: int, capped: bool) -> list[AudioClip]:
         all_texts = list(texts)
         clips: list[AudioClip] = []
         for start in range(0, len(all_texts), self.max_batch):
             chunk = all_texts[start : start + self.max_batch]
-            clips.extend(self._synthesize_chunk(chunk, seed=self.config.seed))
+            tokens = self._max_new_tokens(chunk) if capped else self.server.max_new_tokens
+            clips.extend(self._synthesize_chunk(chunk, seed=seed, max_new_tokens=tokens))
+        return clips
 
-        def reseed(texts: Sequence[str], attempt: int) -> list[AudioClip]:
-            # The runaway subset never exceeds one incoming batch, so it fits one POST.
-            return self._synthesize_chunk(list(texts), seed=self.config.seed + attempt)
-
-        guarded, notes = guard.apply_guard(
-            clips, all_texts, reseed, self.runaway, max_cap_seconds=self._server_cap_seconds()
-        )
-        for note in notes:
-            logger.info("Breeze %s", note)
-        return guarded
-
-    def _synthesize_chunk(self, chunk: Sequence[str], *, seed: int) -> list[AudioClip]:
+    def _synthesize_chunk(
+        self, chunk: Sequence[str], *, seed: int, max_new_tokens: int
+    ) -> list[AudioClip]:
         data = {
             "texts": json.dumps(list(chunk)),
             "instruction": self.config.instruction,
             "cfg_scale": self.config.cfg_scale,
             "ref_text": self._reference_text,
             "seed": seed,
-            "max_new_tokens": self._max_new_tokens(chunk),
+            "max_new_tokens": max_new_tokens,
         }
         response = self._post_batch_with_retry(data)
         return self._split_segments(response, expected_count=len(chunk))
-
-    def _server_cap_seconds(self) -> float:
-        return self.server.max_new_tokens / self.server.frame_rate
 
     def _max_new_tokens(self, chunk: Sequence[str]) -> int:
         tokens = guard.max_new_tokens(chunk, self.runaway, self.server.frame_rate)

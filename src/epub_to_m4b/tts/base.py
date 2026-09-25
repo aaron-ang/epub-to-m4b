@@ -1,8 +1,8 @@
-"""Shared TTS engine interface, PCM16/float32 conversion, fingerprint digest.
+"""Shared TTS engine interface, PCM16 decoding, fingerprint digest.
 
 Real engines exchange audio with their HTTP API or local sidecar as 16-bit
 PCM; everything else in this project works in ``AudioClip``'s float32
-domain. These converters are the shared boundary so no engine module
+domain. ``pcm16_to_float32`` is the shared boundary so no engine module
 reimplements the scaling. ``fingerprint_digest`` is likewise the one place
 that turns an engine's audio-affecting settings into the cache-partitioning
 string.
@@ -28,11 +28,6 @@ _PCM16_SCALE = float(-_PCM16.min)
 
 def pcm16_to_float32(samples: npt.NDArray[np.int16]) -> npt.NDArray[np.float32]:
     return (samples.astype(np.float32) / _PCM16_SCALE).astype(np.float32)
-
-
-def float32_to_pcm16(samples: npt.NDArray[np.float32]) -> npt.NDArray[np.int16]:
-    scaled = np.clip(samples, -1.0, 1.0) * _PCM16_SCALE
-    return np.clip(np.round(scaled), _PCM16.min, _PCM16.max).astype(np.int16)
 
 
 def fingerprint_digest(*parts: str) -> str:

@@ -11,7 +11,7 @@ Turn an EPUB into an M4B audiobook with chapter markers, cover art, and a WebVTT
 
 *Crime and Punishment*, Part 1, Chapter 1, narrated by the self-hosted `breeze` engine:
 
-https://github.com/user-attachments/assets/1cdd67f2-acef-4192-b6ba-218b0e352c3e
+https://github.com/user-attachments/assets/1e2cdbda-f83a-4785-b955-82b9f50c354b
 
 ## Quick start
 

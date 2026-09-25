@@ -24,10 +24,10 @@ def test_empty_pool_yields_no_batches() -> None:
     assert make_batches([], max_batch=8) == []
 
 
-def test_batches_are_length_sorted() -> None:
+def test_batches_are_length_sorted_longest_first() -> None:
     items = [_item("long", 200), _item("short", 5), _item("medium", 50)]
     batches = make_batches(items, max_batch=1)
-    assert [b[0].key for b in batches] == ["short", "medium", "long"]
+    assert [b[0].key for b in batches] == ["long", "medium", "short"]
 
 
 def test_a_batch_never_mixes_wildly_different_lengths_when_pool_is_large() -> None:
@@ -53,7 +53,7 @@ def test_similar_lengths_share_a_batch_regardless_of_origin() -> None:
     # same call when their lengths are close.
     items = [_item("ch0-a", 10), _item("ch1-a", 11), _item("ch0-b", 200), _item("ch1-b", 201)]
     batches = make_batches(items, max_batch=2)
-    assert [{item.key for item in b} for b in batches] == [{"ch0-a", "ch1-a"}, {"ch0-b", "ch1-b"}]
+    assert [{item.key for item in b} for b in batches] == [{"ch0-b", "ch1-b"}, {"ch0-a", "ch1-a"}]
 
 
 def test_max_batch_below_one_raises() -> None:

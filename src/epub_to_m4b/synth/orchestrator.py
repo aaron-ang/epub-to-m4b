@@ -238,7 +238,7 @@ def _synthesize_pending(
     engine_fingerprint: str,
     log: Log,
 ) -> None:
-    """Run every pending sentence through the engine, length-sorted and
+    """Run every pending sentence through the engine, sorted longest first and
     capped at ``engine.max_batch`` per call, storing each result to the
     clip cache the moment it comes back - so a crash partway through only
     ever costs the in-flight batches' work.

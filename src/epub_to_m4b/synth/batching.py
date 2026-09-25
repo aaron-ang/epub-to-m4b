@@ -8,6 +8,11 @@ groups: a single call never mixes a five-word sentence with a
 two-hundred-word one (which would waste the short slots in a fixed-size
 batch), and ``max_batch`` is respected as a hard cap.
 
+Longest first: the heaviest batch runs at the start, so a batch too big for
+the GPU fails in the first minute rather than hours in, the progress log
+only ever speeds up, and the likeliest runaways (long texts) fill the retry
+queue early enough to go out as full batches.
+
 Sorting loses chapter order on purpose. Nothing downstream needs it back:
 every result is stored to the clip cache under its item's ``key`` the
 moment it returns, and chapters are assembled later by looking their keys
@@ -29,10 +34,10 @@ class PendingClip:
 
 
 def make_batches(items: Sequence[PendingClip], max_batch: int) -> list[list[PendingClip]]:
-    """Sort ``items`` by text length, then slice into groups of at most
+    """Sort ``items`` by text length, longest first, then slice into groups of at most
     ``max_batch``. Order within/across batches carries no meaning beyond
     length-similarity."""
     if max_batch < 1:
         raise ValueError(f"max_batch must be >= 1, got {max_batch}")
-    ordered = sorted(items, key=lambda item: len(item.text))
+    ordered = sorted(items, key=lambda item: len(item.text), reverse=True)
     return [list(ordered[i : i + max_batch]) for i in range(0, len(ordered), max_batch)]

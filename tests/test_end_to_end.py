@@ -58,6 +58,21 @@ def test_convert_produces_playable_m4b_and_vtt(tiny_epub: Path, tmp_path: Path) 
     assert container_duration == pytest.approx(last_chapter_end, abs=0.1)
 
 
+def test_convert_logs_encode_progress(
+    tiny_epub: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["convert", str(tiny_epub), "--engine", "silence", "-o", str(tmp_path)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+
+    def index(prefix: str) -> int:
+        return next(i for i, line in enumerate(lines) if line.startswith(prefix))
+
+    assert index("concatenating 2 chapters (") < index("concat 100% (")
+    assert index("concat 100% (") < index("encoding m4b: loudnorm to -16.0 LUFS + AAC 96k")
+    assert index("encoding m4b:") < index("encode 100% (") < index("embedding cover")
+    assert index("embedding cover") < index("wrote ")
+
+
 def test_damaged_m4b_is_rebuilt_even_when_newer_than_every_chapter(
     tiny_epub: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

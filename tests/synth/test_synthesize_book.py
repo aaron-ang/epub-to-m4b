@@ -211,6 +211,22 @@ def test_log_reports_cache_split_then_batches_then_assembly(tmp_path: Path) -> N
     ]
 
 
+def test_batch_lines_are_logged_every_ten_percent(tmp_path: Path) -> None:
+    # _S1 repeats in every chapter: 10 chapters -> 21 unique clips, one per batch.
+    lines: list[str] = []
+    synthesize_book(
+        _book(n_chapters=10),
+        _RecordingEngine(max_batch=1),
+        cache_dir=tmp_path / "cache",
+        out_dir=tmp_path / "out",
+        log=lines.append,
+    )
+    batch_lines = [line for line in lines if line.startswith("batch ")]
+    assert batch_lines == [
+        f"batch {n}/21, {n}/21 clips" for n in (3, 5, 7, 9, 11, 13, 15, 17, 19, 21)
+    ]
+
+
 def test_log_counts_cached_clips_when_only_the_chapter_needs_rebuilding(tmp_path: Path) -> None:
     book = _book(n_chapters=1)
     cache_dir = tmp_path / "cache"

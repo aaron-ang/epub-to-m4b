@@ -10,7 +10,8 @@ import hashlib
 import json
 import shutil
 import subprocess
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -127,14 +128,44 @@ def ffprobe_chapters_command(m4b_path: Path) -> list[str]:
     ]
 
 
+# ffmpeg's machine-readable progress: ``key=value`` lines on stdout, a block
+# per update. ``out_time_us`` is the output position in microseconds
+# (``N/A`` before the first frame). Added by the runner, not the command
+# builders, so ``encode_settings_digest`` does not change.
+_PROGRESS_ARGS = ("-progress", "pipe:1", "-nostats")
+_OUT_TIME_KEY = "out_time_us="
+
+
+def _require_executable(name: str) -> None:
+    if shutil.which(name) is None:
+        raise FFmpegError(f"{name!r} not found on PATH")
+
+
 def run_command(args: Sequence[str]) -> str:
-    exe = shutil.which(args[0])
-    if exe is None:
-        raise FFmpegError(f"{args[0]!r} not found on PATH")
+    _require_executable(args[0])
     result = subprocess.run(args, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise FFmpegError(f"{args[0]} failed (exit {result.returncode}): {result.stderr.strip()}")
     return result.stdout
+
+
+def run_with_progress(args: Sequence[str], progress: Callable[[float], None]) -> None:
+    """Run an ffmpeg command, calling ``progress`` with the output position in
+    seconds at each update. stderr goes to a temp file, not a pipe, so a
+    chatty ffmpeg cannot block on a full pipe while stdout is being read."""
+    _require_executable(args[0])
+    argv = [args[0], *_PROGRESS_ARGS, *args[1:]]
+    with tempfile.TemporaryFile(mode="w+") as stderr:
+        with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=stderr, text=True) as proc:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if line.startswith(_OUT_TIME_KEY):
+                    value = line.removeprefix(_OUT_TIME_KEY).strip()
+                    if value.isdigit():
+                        progress(int(value) / 1_000_000)
+        if proc.returncode != 0:
+            stderr.seek(0)
+            raise FFmpegError(f"{args[0]} failed (exit {proc.returncode}): {stderr.read().strip()}")
 
 
 def probe_chapters(m4b_path: Path) -> dict[str, Any]:

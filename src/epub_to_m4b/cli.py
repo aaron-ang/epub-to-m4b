@@ -7,20 +7,22 @@ import logging
 import re
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import soundfile as sf
 
 from epub_to_m4b import __version__
 from epub_to_m4b.audio.ffmpeg import (
+    AAC_BITRATE,
+    LOUDNESS_TARGET_LUFS,
     concat_command,
     concat_list,
     encode_m4b_command,
     encode_settings_digest,
     probe_chapters,
     require_ffmpeg,
-    run_command,
+    run_with_progress,
 )
 from epub_to_m4b.audio.metadata import build_ffmetadata, embed_cover
 from epub_to_m4b.audio.vtt import write_vtt
@@ -29,6 +31,7 @@ from epub_to_m4b.config import load_config, resolve_cache_dir
 from epub_to_m4b.epub.chapters import DEFAULT_MIN_CHARS, DEFAULT_TOC_DEPTH
 from epub_to_m4b.epub.reader import read_book
 from epub_to_m4b.errors import EpubToM4bError
+from epub_to_m4b.progress import PercentSteps
 from epub_to_m4b.synth.cache import (
     atomic_replace,
     clear_encode_digest,
@@ -252,7 +255,7 @@ def _convert(book: Book, args: argparse.Namespace) -> int:
         print(f"{m4b_path} already up to date, skipping re-encode")
     else:
         clear_encode_digest(out_dir, book.source_sha256)
-        _write_m4b(book, m4b_path, chapter_files, durations)
+        _write_m4b(book, m4b_path, chapter_files, durations, log=log)
         store_encode_digest(out_dir, book.source_sha256, digest)
 
     write_vtt(cues, vtt_path)
@@ -281,12 +284,39 @@ def _m4b_is_current(
     return len(probe.get("chapters", [])) == expected_chapters
 
 
+def _hms(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole // 3600}:{whole % 3600 // 60:02d}:{whole % 60:02d}"
+
+
+def _run_logged(args: Sequence[str], label: str, total: float, log: Callable[[str], None]) -> None:
+    """Run an ffmpeg command, logging ``label N% (pos / total)`` each
+    ``PROGRESS_STEP_PERCENT`` of ``total`` seconds, and 100% once it exits:
+    ffmpeg's last reported position can fall just short of the total."""
+    steps = PercentSteps(total)
+
+    def report(seconds: float) -> None:
+        seconds = min(seconds, total)
+        if steps.due(seconds):
+            percent = int(seconds * 100 // total) if total > 0 else 100
+            log(f"{label} {percent}% ({_hms(seconds)} / {_hms(total)})")
+
+    run_with_progress(args, report)
+    report(total)
+
+
 def _write_m4b(
-    book: Book, m4b_path: Path, chapter_files: Sequence[Path], durations: Sequence[float]
+    book: Book,
+    m4b_path: Path,
+    chapter_files: Sequence[Path],
+    durations: Sequence[float],
+    *,
+    log: Callable[[str], None],
 ) -> None:
     """Concat + loudness-normalized encode + cover-embed into a temp file
     next to ``m4b_path``, then ``os.replace`` it into place, so a crash
     mid-encode never leaves a partial m4b at the real path."""
+    total = sum(durations)
 
     def write_body(tmp_m4b: Path) -> None:
         with tempfile.TemporaryDirectory(prefix="epub-to-m4b-") as tmp_name:
@@ -294,15 +324,21 @@ def _write_m4b(
             list_path = tmp_dir / "concat.txt"
             list_path.write_text(concat_list(chapter_files), encoding="utf-8")
             combined_path = tmp_dir / "combined.flac"
-            run_command(concat_command(list_path, combined_path))
+            log(f"concatenating {len(chapter_files)} chapters ({_hms(total)})")
+            _run_logged(concat_command(list_path, combined_path), "concat", total, log)
 
             metadata_path = tmp_dir / "ffmetadata.txt"
             metadata_path.write_text(build_ffmetadata(book, durations), encoding="utf-8")
             sample_rate = sf.info(combined_path).samplerate
-            run_command(
-                encode_m4b_command(combined_path, metadata_path, tmp_m4b, sample_rate=sample_rate)
+            log(f"encoding m4b: loudnorm to {LOUDNESS_TARGET_LUFS} LUFS + AAC {AAC_BITRATE}")
+            _run_logged(
+                encode_m4b_command(combined_path, metadata_path, tmp_m4b, sample_rate=sample_rate),
+                "encode",
+                total,
+                log,
             )
         if book.cover and book.cover_mime:
+            log("embedding cover")
             embed_cover(tmp_m4b, book.cover, book.cover_mime)
 
     atomic_replace(m4b_path, write_body, suffix=".m4b")

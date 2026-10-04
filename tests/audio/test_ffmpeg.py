@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from epub_to_m4b.audio.ffmpeg import (
     ffprobe_chapters_command,
     require_ffmpeg,
     run_command,
+    run_with_progress,
 )
 
 
@@ -130,3 +132,53 @@ def test_run_command_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_run_command_returns_stdout() -> None:
     assert run_command(["echo", "hello"]) == "hello\n"
+
+
+_FAKE_FFMPEG = """#!/bin/sh
+echo "$@" > "$(dirname "$0")/argv.txt"
+echo out_time_us=N/A
+echo out_time_us=1500000
+echo progress=continue
+echo out_time_us=3000000
+echo progress=end
+echo boom >&2
+exit {code}
+"""
+
+
+def _fake_ffmpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int) -> Path:
+    exe = tmp_path / "ffmpeg"
+    exe.write_text(_FAKE_FFMPEG.format(code=code), encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    return tmp_path / "argv.txt"
+
+
+def test_run_with_progress_reports_output_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argv_path = _fake_ffmpeg(tmp_path, monkeypatch, code=0)
+    seen: list[float] = []
+    run_with_progress(["ffmpeg", "-i", "in.flac", "out.m4b"], seen.append)
+    assert seen == [1.5, 3.0]
+    assert argv_path.read_text(encoding="utf-8").split() == [
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-i",
+        "in.flac",
+        "out.m4b",
+    ]
+
+
+def test_run_with_progress_raises_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_ffmpeg(tmp_path, monkeypatch, code=1)
+    with pytest.raises(FFmpegError, match=r"ffmpeg failed \(exit 1\): boom"):
+        run_with_progress(["ffmpeg", "-i", "in.flac", "out.m4b"], lambda _s: None)
+
+
+def test_run_with_progress_raises_for_missing_executable() -> None:
+    with pytest.raises(FFmpegError, match="not found on PATH"):
+        run_with_progress(["definitely-not-a-real-binary-xyz"], lambda _s: None)

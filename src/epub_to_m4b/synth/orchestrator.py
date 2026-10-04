@@ -25,6 +25,7 @@ from pathlib import Path
 from epub_to_m4b.audio.assemble import assemble_chapter
 from epub_to_m4b.book import AudioClip, Book, Paragraph, ParagraphKind, Sentence
 from epub_to_m4b.errors import EpubToM4bError
+from epub_to_m4b.progress import PercentSteps
 from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.batching import PendingClip, make_batches
 from epub_to_m4b.synth.retry import RetryQueue, Settled
@@ -254,9 +255,13 @@ def _synthesize_pending(
     each finishes, in whatever order that is, since every clip travels with
     its own ``PendingClip`` key. Everything else stays a plain sequential
     loop with no threads involved.
+
+    A ``batch n/N`` line is logged each ``PROGRESS_STEP_PERCENT`` of the
+    batches, not per batch: a one-text-per-call engine has thousands.
     """
     batches = make_batches(pending, engine.max_batch)
     retry = RetryQueue(engine)
+    steps = PercentSteps(len(batches))
     done = 0
 
     def keep(settled: Sequence[Settled]) -> None:
@@ -271,8 +276,9 @@ def _synthesize_pending(
         offered = (retry.offer(item, clip) for item, clip in zip(batch, clips, strict=True))
         keep([settled for settled in offered if settled is not None])
         keep(retry.flush(final=False))
-        queued = f", {len(retry)} queued for retry" if len(retry) else ""
-        log(f"batch {n}/{len(batches)}, {done}/{len(pending)} clips{queued}")
+        if steps.due(n):
+            queued = f", {len(retry)} queued for retry" if len(retry) else ""
+            log(f"batch {n}/{len(batches)}, {done}/{len(pending)} clips{queued}")
 
     if engine.max_concurrency <= 1:
         for n, batch in enumerate(batches, start=1):

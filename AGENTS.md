@@ -20,6 +20,7 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 | `config.py`          | Config path resolution; `[engine.*]` tables -> `AppConfig`     |
 | `book.py`            | `Book`, `Chapter`, `Paragraph`, `Sentence`, `AudioClip`        |
 | `errors.py`          | `EpubToM4bError`: base for user-facing errors; CLI exit 1      |
+| `progress.py`        | `PercentSteps`: gates progress lines to every N percent        |
 | `epub/`              | ebooklib + BeautifulSoup -> `Book`; TOC/heading chaptering     |
 | `text/`              | `normalize.py`: NeMo (per language, output used as is); `split.py`: sentence split |
 | `tts/`               | `TTSEngine` ABC, registry, engines, HTTP retry, sidecar, guard |
@@ -153,6 +154,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 
 | Constant | Module | Meaning |
 |----------|--------|---------|
+| `PROGRESS_STEP_PERCENT` | `progress.py` | Percent of batches / encoded audio between progress lines |
 | `DEFAULT_MAX_CHARS` | `text/split.py` | Longest clip text handed to an engine |
 | `DEFAULT_TOC_DEPTH` | `epub/chapters.py` | TOC nesting level that starts a chapter |
 | `DEFAULT_MIN_CHARS` | `epub/chapters.py` | Body chars below which a chapter is a stub and merges |

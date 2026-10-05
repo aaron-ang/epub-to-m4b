@@ -23,7 +23,8 @@ class PercentSteps:
         if done >= self._total:
             self._finished = True
             return True
-        step = int(done * 100 // (self._total * PROGRESS_STEP_PERCENT))
+        # True division: float ``//`` can floor an exact step boundary one short.
+        step = int(done * 100 / (self._total * PROGRESS_STEP_PERCENT))
         if step > self._step:
             self._step = step
             return True

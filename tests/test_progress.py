@@ -26,3 +26,10 @@ def test_end_is_due_once() -> None:
 
 def test_zero_total_is_due_once() -> None:
     assert _due(0, [0, 0]) == [0]
+
+
+def test_exact_float_step_is_due() -> None:
+    # Float ``//`` floors (half * 100) // (total * 10) to 4 for this total.
+    total = 25065.13084500536
+    forty, half = total * 4 / 10, total * 5 / 10
+    assert _due(total, [forty, half]) == [forty, half]

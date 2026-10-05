@@ -298,7 +298,8 @@ def _run_logged(args: Sequence[str], label: str, total: float, log: Callable[[st
     def report(seconds: float) -> None:
         seconds = min(seconds, total)
         if steps.due(seconds):
-            percent = int(seconds * 100 // total) if total > 0 else 100
+            # True division: float ``//`` can floor ``total * 100 // total`` to 99.
+            percent = 100 if seconds >= total else int(seconds * 100 / total)
             log(f"{label} {percent}% ({_hms(seconds)} / {_hms(total)})")
 
     run_with_progress(args, report)

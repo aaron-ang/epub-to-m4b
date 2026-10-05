@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
 
-from epub_to_m4b import __version__
+from epub_to_m4b import __version__, cli
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.cli import build_parser, main
 from epub_to_m4b.tts.base import TTSEngine
@@ -255,3 +255,18 @@ def test_version_flag_prints_installed_package_version(
         main(["--version"])
     assert excinfo.value.code == 0
     assert capsys.readouterr().out.strip() == __version__
+
+
+def test_run_logged_reports_100_percent_at_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    # (total * 100) // total floors to 99.0 for this total, which once
+    # labelled the final line "99%" at a position equal to the total.
+    total = 25423.164674380045
+
+    def fake_run(_args: Sequence[str], progress: Callable[[float], None]) -> None:
+        progress(total / 2)
+        progress(total)
+
+    monkeypatch.setattr(cli, "run_with_progress", fake_run)
+    lines: list[str] = []
+    cli._run_logged(["ffmpeg"], "encode", total, lines.append)
+    assert lines == ["encode 50% (3:31:51 / 7:03:43)", "encode 100% (7:03:43 / 7:03:43)"]

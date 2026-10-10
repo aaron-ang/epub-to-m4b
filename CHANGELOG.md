@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/aaron-ang/epub-to-m4b/compare/v0.3.0...v0.4.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tts:** RunawayPolicy loses its cut/fade behaviour, and TTSEngine gains retries, clip_miss and resynthesize hooks.
+
+### Features
+
+* **cli:** log progress every 10% and stream ffmpeg progress ([1a51594](https://github.com/aaron-ang/epub-to-m4b/commit/1a5159495eeb99e9ce9ef0f54ada02097a410fba))
+
+
+### Bug Fixes
+
+* **cli:** report exact progress percent at float boundaries ([d85717a](https://github.com/aaron-ang/epub-to-m4b/commit/d85717a71ee46b7e3f06bce55387077d209030ce))
+* **epub:** drop bare bracketed note markers ([2e80c95](https://github.com/aaron-ang/epub-to-m4b/commit/2e80c9578209c18d3ff9619228b864ae435bcb42))
+* **epub:** drop TOC entries labelled Index ([2ed4fa0](https://github.com/aaron-ang/epub-to-m4b/commit/2ed4fa06198c1e7c6c7a1fc6bdc8420ec59f13c7))
+* **epub:** keep bare-number chapters after an excluded TOC label ([d38ffc0](https://github.com/aaron-ang/epub-to-m4b/commit/d38ffc08ea0066078b43e88d473cb263be13856c))
+* **tts:** never cut clips; retry them in full capped batches ([9cc986a](https://github.com/aaron-ang/epub-to-m4b/commit/9cc986a2dc6b5bd3df0cfba25e96c89df4136f19))
+
+
+### Performance Improvements
+
+* **synth:** render the longest batch first ([87e9b46](https://github.com/aaron-ang/epub-to-m4b/commit/87e9b46d67f4fb5c77bad1553833a411e3b14249))
+
+
+### Documentation
+
+* update audio sample ([80e64d2](https://github.com/aaron-ang/epub-to-m4b/commit/80e64d2db9ea88485ab31146f64742913839f8f0))
+
 ## [0.3.0](https://github.com/aaron-ang/epub-to-m4b/compare/v0.2.0...v0.3.0) (2026-09-24)
 
 

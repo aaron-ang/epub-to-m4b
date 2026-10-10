@@ -167,6 +167,21 @@ def test_bare_number_and_truncated_labels_fold_into_previous() -> None:
     assert chapters[0].source_ids == ("a", "s1", "s2", "q")
 
 
+def test_bare_number_chapters_after_excluded_label_are_kept() -> None:
+    # Stoner: "Dedication" then chapters labelled only "I", "II", ... Folding
+    # them into the excluded "Dedication" once dropped the whole novel.
+    docs = [doc("intro", LONG), doc("ded", "For my wife."), doc("c1", LONG), doc("c2", LONG)]
+    entries = toc(
+        ("Introduction", "intro.xhtml"),
+        ("Dedication", "ded.xhtml"),
+        ("I", "c1.xhtml"),
+        ("II", "c2.xhtml"),
+    )
+    chapters = build_chapters(docs, entries, "Book")
+    assert titles(chapters) == ["Introduction", "I", "II"]
+    assert [c.source_ids for c in chapters] == [("intro",), ("c1",), ("c2",)]
+
+
 def test_toc_depth_filters_entries() -> None:
     docs = [doc("p", LONG), doc("c1", LONG), doc("c2", LONG)]
     entries = toc(("Part", "p.xhtml"), ("Ch 1", "c1.xhtml", 2), ("Ch 2", "c2.xhtml", 2))

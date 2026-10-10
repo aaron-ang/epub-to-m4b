@@ -241,7 +241,7 @@ def _first_heading_key(doc: SpineDoc) -> str | None:
 def _toc_drafts(
     docs: Sequence[SpineDoc], starts: Sequence[tuple[int, TocEntry]], min_chars: int
 ) -> list[_Draft]:
-    starts = [(i, e) for n, (i, e) in enumerate(starts) if n == 0 or not _is_section_label(e.title)]
+    starts = _fold_sections(starts)
     drafts: list[_Draft] = []
     first = starts[0][0] if starts else len(docs)
     front = _draft(None, docs[:first])
@@ -253,6 +253,21 @@ def _toc_drafts(
             continue
         drafts.append(_draft(entry.title, docs[start:end]))
     return drafts
+
+
+def _fold_sections(starts: Sequence[tuple[int, TocEntry]]) -> list[tuple[int, TocEntry]]:
+    """Drop section-label starts that fall inside a named chapter. One that
+    follows an excluded label (Stoner's "Dedication", "I", "II", ...) or
+    another section label is a chapter itself; folding it would hide its text
+    in a span that is skipped or has no real title."""
+    kept: list[tuple[int, TocEntry]] = []
+    for start in starts:
+        if kept and _is_section_label(start[1].title):
+            previous = kept[-1][1].title
+            if not _is_section_label(previous) and previous.casefold() not in EXCLUDED_LABELS:
+                continue
+        kept.append(start)
+    return kept
 
 
 def _is_section_label(title: str) -> bool:

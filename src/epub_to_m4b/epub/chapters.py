@@ -75,6 +75,7 @@ EXCLUDED_LABELS = frozenset(
         "references",
         "bibliography",
         "sources",
+        "index",
     }
 )
 MIN_TOC_COVERAGE = 0.30

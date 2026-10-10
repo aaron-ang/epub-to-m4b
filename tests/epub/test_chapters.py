@@ -144,6 +144,13 @@ def test_note_and_source_list_labels_dropped_without_epub_types() -> None:
     assert [c.source_ids for c in chapters] == [("a",), ("b",)]
 
 
+def test_index_label_dropped_without_epub_types() -> None:
+    docs = [doc("a", LONG), doc("i", LONG)]
+    chapters = build_chapters(docs, toc(("One", "a.xhtml"), ("Index", "i.xhtml")), "Book")
+    assert titles(chapters) == ["One"]
+    assert [c.source_ids for c in chapters] == [("a",)]
+
+
 def test_doc_left_empty_by_note_list_semantics_excluded() -> None:
     # epub/html.py already dropped the note list; only its heading is left.
     notes = doc("n", ("Notes", H), types=frozenset({"endnotes"}))

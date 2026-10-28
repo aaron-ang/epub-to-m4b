@@ -9,6 +9,12 @@
       "enabled": false
     },
     {
+      "description": "Python minor bumps are a migration, not an update: requires-python, ruff and mypy pin 3.14, and conda-forge must first build pynini and editdistance for the new version",
+      "matchPackageNames": ["python"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
       "description": "One PR for all GitHub Actions bumps",
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"

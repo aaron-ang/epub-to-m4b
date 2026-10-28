@@ -36,7 +36,7 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 
 - Engines receive plain text only: no files, SSML, or silence. The orchestrator owns gaps.
 - `audio/` owns files; everything upstream works with in-memory dataclasses.
-- No inline `[break]`/`[pause]` markers. Gaps are `Sentence.gap_after`, computed deterministically from punctuation and position (paragraph end, chapter end, heading).
+- No inline `[break]`/`[pause]` markers. Gaps are `Sentence.gap_after`, computed deterministically from punctuation and position (paragraph end, chapter end, heading). `audio/assemble.py` trims each clip's own edge silence to `_EDGE_PAD_SECONDS` first, so pauses are the gap plus at most that pad per edge.
 - API keys come from the env var named by `api_key_env`, read in `tts/registry.py` only. Never in TOML, never in engines.
 - Engine-specific behaviour lives in that engine's module, not the ABC. Sidecar lifecycle (spawn/adopt, health poll, busy-wait, child env) lives in `tts/sidecar.py` behind `SidecarPolicy` and is shared by every sidecar engine.
 - Adopted sidecar servers are never killed on `close()`.
@@ -86,7 +86,7 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 | `openai`     | required              | 1             | 4                 | 1000 |
 | `elevenlabs` | required              | 1             | 2                 | 1000 |
 | `deepgram`   | optional (all defaults) | 1           | 4                 | 1000 |
-| `drama`      | required              | `batch_size`  | 2 (each batch posts its texts concurrently) | longest text whose retry limit fits the context left after its prompt (~2300 at 8192) |
+| `drama`      | required              | `batch_size`  | 2 (each batch posts its texts concurrently) | longest text, at 4 UTF-8 bytes per char, whose retry limit fits the context left after its prompt and the server's `max_new_tokens` cap (~1200 at 8192) |
 
 Sidecar engines call `start_or_adopt(command, port, log_path=..., policy=SidecarPolicy(...), env=...)`; a 200 from `GET /health` means ready, and the body belongs to the engine. Single-slot servers (Breeze) answer 409 while busy, so their POSTs go through `post_until_free(send, policy=..., on_busy=...)`; queueing servers (vLLM-Omni) skip it.
 
@@ -99,7 +99,7 @@ Engine notes:
 | Engine                             | Notes                                                                                                                                          |
 |------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `breeze`                           | Model is the last `command` arg (local dir or HF repo id, resolved by breeze-tts); server started with `breeze-tts-server`; `GET /v1/model` reports `frame_rate`, `model_digest`, `max_new_tokens`, `max_batch_texts` (`ServerInfo`; 404 or bad field = wrong server); fingerprint uses `model_digest` + reference wav hash; first-pass token cap from `frame_rate`, clamped to `max_new_tokens`, `resynthesize` uses seed + round, capped like the first pass unless `capped=False`; `clip_miss` is the duration window (never cuts) from `tts/guard.py` via `RunawayPolicy`; 409 busy-wait via `SidecarPolicy` |
-| `drama`                            | Fish Audio Drama 3 on `vllm serve <model> --omni` (vLLM-Omni); `GET /v1/models` must list `model` with its `max_model_len` (else wrong server); each request's budget is `max_model_len` minus its prompt rows (reference frames + transcript + text chars + `_TEMPLATE_ROWS`); reference voice uploaded once via `POST /v1/audio/voices` as `e2m-<digest of audio + transcript>` (skipped when `GET /v1/audio/voices` lists it), so the server encodes it once; one text per `POST /v1/audio/speech` with `voice`, `seed`, `max_new_tokens` (codec frames, 44100/2048 Hz), `response_format=pcm`; `synthesize` posts a batch's texts concurrently and the server batches them on the GPU; per-text token cap from `tts/guard.py` clamped to that budget, uncapped reseeds get the whole budget, `resynthesize` uses seed + round; fingerprint uses `model`, reference wav hash + text, seed; no busy-wait |
+| `drama`                            | Fish Audio Drama 3 on `vllm serve <model> --omni` (vLLM-Omni); `GET /v1/models` must list `model` with its `max_model_len` (else wrong server); each request's budget is `max_model_len` minus its prompt rows (reference frames + transcript and text UTF-8 bytes + `_TEMPLATE_ROWS`), at most `_MAX_NEW_TOKENS`; reference voice uploaded once via `POST /v1/audio/voices` as `e2m-<digest of audio + transcript>` (skipped when `GET /v1/audio/voices` lists it), so the server encodes it once; one text per `POST /v1/audio/speech` with `voice`, `seed`, `max_new_tokens` (codec frames, 44100/2048 Hz), `response_format=pcm`; `synthesize` posts a batch's texts concurrently and the server batches them on the GPU; per-text token cap from `tts/guard.py` clamped to that budget, uncapped reseeds get the whole budget, `resynthesize` uses seed + round; fingerprint uses `model`, reference wav hash + text, seed; no busy-wait |
 | `openai`, `elevenlabs`, `deepgram` | `tts/http.py` retry                                                                                                                            |
 | `silence`, `tone`                  | none                                                                                                                                           |
 
@@ -124,7 +124,7 @@ Engine notes:
 - `cache_dir` defaults to `~/.cache/epub-to-m4b`; `E2M_CACHE_DIR` overrides it. Tests must set it to a tmp dir.
 - `nemo/` holds NeMo's compiled grammars, one dir per language, built by the first normalization in that language that finds none. `E2M_NEMO_CACHE_DIR` replaces `<cache_dir>/nemo`; the test session points it at pytest's cache dir and builds the English normalizer once.
 - Clips are shared across books. The chapter work dir is per book and per `out_dir`.
-- `text` is the exact string passed to `engine.synthesize`. Gaps are added at assembly, never baked into a clip.
+- `text` is the exact string passed to `engine.synthesize`. Gaps are added at assembly, never baked into a clip; clips are cached untrimmed.
 - The chapter manifest records engine fingerprint, sample rate, clip keys, gaps, offsets, duration. Any mismatch re-assembles the chapter.
 - Zero-length or unreadable cache files are deleted and treated as misses.
 - The `.m4b` is re-encoded when any chapter FLAC is newer than it, ffprobe cannot read it with the expected chapter count, or `encode.json` is missing or its digest differs from the current encode arguments.
@@ -170,6 +170,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `AAC_BITRATE` | `audio/ffmpeg.py` | AAC bitrate for the `.m4b` |
 | `LOUDNESS_TARGET_LUFS` | `audio/ffmpeg.py` | Integrated loudness `loudnorm` normalizes the `.m4b` to |
 | `_MIN_CHAPTER_SECONDS` | `audio/assemble.py` | Floor on assembled chapter length |
+| `_EDGE_FRAME_SECONDS`, `_EDGE_SILENCE_DB`, `_EDGE_PAD_SECONDS` | `audio/assemble.py` | Clip edge trim: frame size, silence level below the clip's loudest frame, silence kept around speech |
 | `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause / paragraph / heading and chapter end |
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |
 | `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size (clamped to server `max_batch_texts`) |
@@ -177,6 +178,8 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `_BATCH_RESENDS` | `tts/breeze.py` | Batch requests resent after a reset connection (seeded, so same clips) |
 | `_SPEECH_RESENDS` | `tts/drama.py` | Speech requests resent after a reset connection (same text + seed = same clip) |
 | `_TEMPLATE_ROWS` | `tts/drama.py` | Prompt rows allowed for the chat template on top of reference, transcript and text |
+| `_MAX_NEW_TOKENS` | `tts/drama.py` | vLLM-Omni's ceiling on a speech request's `max_new_tokens` |
+| `_MAX_UTF8_BYTES` | `tts/drama.py` | Prompt rows per character `max_chars` is sized for (UTF-8 worst case) |
 | `_MAX_CHARS` | `tts/breeze.py` | Ceiling on Breeze's `max_chars` (lockstep batches stall behind one long text) |
 | `_MAX_CHARS` | `tts/openai_compat.py`, `tts/elevenlabs.py`, `tts/deepgram.py` | Longest sentence sent uncut to the API |
 | `_SIDECAR_ENV` | `tts/breeze.py` | Env vars the Breeze server child gets when spawned (`TRITON_PTXAS_PATH`) |

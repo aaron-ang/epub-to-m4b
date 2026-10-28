@@ -52,7 +52,7 @@ platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
 # wheels for come from conda-forge, which builds them for every platform
 # above: pynini (at the version NeMo pins) with its OpenFst, and editdistance.
 [tool.pixi.dependencies]
-python = "3.14.*"
+python = "3.15.*"
 pynini = "==2.1.6.post1"
 openfst = "1.8.4.*"
 editdistance = ">=0.8"

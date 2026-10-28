@@ -82,6 +82,7 @@ Chapter markers in the rendered file (`ffprobe -show_chapters out/outliers-the-s
 | `deepgram`   | Cloud                                                                                | API key in the env var named by `api_key_env`                 | Per character, provider pricing | Config table optional                   |
 | `elevenlabs` | Cloud                                                                                | API key in the env var named by `api_key_env`                 | Per character, provider pricing | `voice_id` required                     |
 | `breeze`     | Self-hosted GPU sidecar (separate `breeze-tts` server, spawned or adopted on `port`) | Model weights + `breeze-tts-server` `command` in config     | Free                            | Batched (`batch_size`); resume-friendly |
+| `drama`      | Self-hosted GPU sidecar (vLLM-Omni serving Fish Audio Drama 3, spawned or adopted on `port`) | ~48 GB GPU memory + `vllm serve ... --omni` `command` + a reference voice in config | Free                | Concurrent (`batch_size`); voice cloned from `reference_audio` |
 | `silence`    | Local                                                                                | Nothing                                                       | Free                            | Pipeline dry runs; silent clips         |
 | `tone`       | Local                                                                                | Nothing                                                       | Free                            | Pipeline dry runs; sine-tone clips      |
 
@@ -97,7 +98,7 @@ Chapter markers in the rendered file (`ffprobe -show_chapters out/outliers-the-s
 
 | Flag                 | Required | Meaning                                                                          |
 |----------------------|----------|----------------------------------------------------------------------------------|
-| `--engine NAME`      | yes      | `breeze`, `deepgram`, `elevenlabs`, `openai`, `silence`, `tone`                  |
+| `--engine NAME`      | yes      | `breeze`, `deepgram`, `drama`, `elevenlabs`, `openai`, `silence`, `tone`         |
 | `-o, --out-dir DIR`  | yes      | Output directory                                                                 |
 | `--config PATH`      | no       | TOML config file (default: `$E2M_CONFIG`, then `~/.config/epub-to-m4b/config.toml`) |
 
@@ -108,6 +109,7 @@ Chapter markers in the rendered file (`ffprobe -show_chapters out/outliers-the-s
 | `--chapter N`  | Only chapter `N` (1-based)                               |
 | `--normalized` | Run each paragraph through text normalization (NeMo)     |
 | `--split`      | Also show sentence boundaries (implies `--normalized`)   |
+| `--max-chars`  | With `--split`, cut only sentences longer than this (default 125); set it to the engine's limit to see its clips |
 
 Flags shared by all subcommands:
 
@@ -186,6 +188,22 @@ Only `[engine.<name>]` tables are read. Unknown keys, missing required keys, and
 
 `command` is the argv that starts `breeze-tts-server` (from breeze-tts) and ends with the model: a local dir or a Hugging Face repo id (plus `--revision`), resolved by breeze-tts. `--host`/`--port` are appended. A server already listening on `port` is adopted instead of spawned. `batch_size` is clamped to the server's reported limit.
 
+**Self-hosted: Drama 3**
+
+`[engine.drama]`
+
+| Key               | Type     | Default               | Required |
+|-------------------|----------|-----------------------|----------|
+| `command`         | string[] |                       | ✓        |
+| `reference_audio` | string   |                       | ✓        |
+| `reference_text`  | string   |                       | ✓        |
+| `model`           | string   | `"fishaudio/drama-3"` |          |
+| `port`            | int      | `8091`                |          |
+| `batch_size`      | int      | `64`                  |          |
+| `seed`            | int      | `42`                  |          |
+
+`command` is the argv that starts `vllm serve <model> --omni` from [vLLM-Omni](https://github.com/vllm-project/vllm-omni); `--host`/`--port` are appended, and `model` must match the model it serves. A server already listening on `port` is adopted instead of spawned; a cold start takes about ten minutes. The narrator voice is cloned from `reference_audio` (WAV, FLAC or MP3, up to 60 s) and `reference_text`, its exact transcript; both are uploaded to the server once as a voice named after their content, and a changed file or transcript uploads a new one. `batch_size` sentences are sent at once and two batches run together; the server decodes them in one GPU batch. Drama 3 weights are under the Fish Audio Community License.
+
 ```toml
 [engine.openai]
 base_url = "https://api.openai.com/v1"
@@ -203,6 +221,14 @@ command = [
   "uv", "run", "--directory", "/path/to/breeze-tts", "breeze-tts-server",
   "BreezeBlue/Breeze-TTS-2",
 ]
+
+[engine.drama]
+command = [
+  "/path/to/vllm-omni/.venv/bin/vllm", "serve", "fishaudio/drama-3", "--omni",
+  "--init-timeout", "1800", "--stage-init-timeout", "1800",
+]
+reference_audio = "~/voices/narrator.wav"
+reference_text = "The exact words spoken in narrator.wav."
 ```
 
 ## Output
@@ -217,6 +243,7 @@ command = [
 - Rerun the same command to resume an interrupted or partial render.
 - Sentence clips are cached as FLAC under `<cache_dir>/clips/<engine-fingerprint>/`, shared across books. Assembled chapters are cached under `<out_dir>/.work/<book-id>/chapters/`.
 - Changing engine, voice, model, or other audio settings stops old clips being reused. Old clips stay on disk.
+- A clip is one sentence, or several short ones packed together, so it always ends where a sentence ends. Only a sentence longer than the engine accepts is cut, at a comma where possible: about 125 characters for `silence`/`tone`, up to 300 for `breeze`, 1000 for the API engines, whatever fits `drama`'s context after the reference voice (about 2300 at the default 8192).
 - Clips are keyed by the exact sentence text. A text pipeline change (`text/normalize.py`, `text/split.py`, a new `nemo-text-processing`) re-synthesizes only sentences whose text it changed.
 - NeMo compiles a language's grammars on first use into `<cache_dir>/nemo/<version>/<lang>/` (`E2M_NEMO_CACHE_DIR` replaces `<cache_dir>/nemo`); later runs load them from there.
 - A missing or damaged `.m4b`, or one encoded with different encode settings, is rebuilt; an up-to-date one is kept and only the `.vtt` is rewritten.
@@ -232,6 +259,8 @@ command = [
 | `error: server on port 7861 did not become healthy within 180s; see log at ...`               | Read `<cache_dir>/breeze-server-<port>.log`; check `command` (including its model argument) and whether another process holds `port`         |
 | `Breeze server at ...: GET /v1/model answered 404 ...` / `missing or invalid /v1/model field(s)` | Server is not `breeze-tts-server`; stop it and start it with `breeze-tts-server` from the current breeze-tts |
 | `Breeze server busy, waiting for the running inference to finish` (stderr, once per batch)    | Another client holds the server's single inference slot; the run waits (up to 300 s, retrying every 5 s) and continues on its own |
+| `Drama server at ... serves [...], not 'fishaudio/drama-3'`                                   | Another model holds `port`; stop it, or set `[engine.drama].model` to the model it serves |
+| Drama server log shows `did not become ready within 300s (stage_init_timeout)` or `Orchestrator startup timed out after 600s` | Weight loading is slow on a cold page cache; add `--init-timeout 1800 --stage-init-timeout 1800` to `command` |
 
 ## Development
 

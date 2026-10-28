@@ -13,7 +13,15 @@ _NO_CONFIG = AppConfig()
 
 
 def test_available_engines_lists_every_registered_engine() -> None:
-    assert available_engines() == ["breeze", "deepgram", "elevenlabs", "openai", "silence", "tone"]
+    assert available_engines() == [
+        "breeze",
+        "deepgram",
+        "drama",
+        "elevenlabs",
+        "openai",
+        "silence",
+        "tone",
+    ]
 
 
 def test_create_engine_silence() -> None:
@@ -32,6 +40,11 @@ def test_create_engine_unknown_raises() -> None:
 def test_create_engine_breeze_without_config_raises_clear_error() -> None:
     with pytest.raises(ConfigError, match=r"engine\.breeze"):
         create_engine("breeze", _NO_CONFIG)
+
+
+def test_create_engine_drama_without_config_raises_clear_error() -> None:
+    with pytest.raises(ConfigError, match=r"engine\.drama.*reference_audio"):
+        create_engine("drama", _NO_CONFIG)
 
 
 _OPENAI = OpenAIConfig(base_url="http://localhost:1", model="m", voice="v")

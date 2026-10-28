@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import os
 import subprocess
 from pathlib import Path
@@ -11,8 +12,9 @@ import pytest
 from epub_to_m4b.tts import sidecar
 
 
-def _ok(sample_rate: int = 24000) -> httpx.Response:
-    return httpx.Response(200, json={"status": "ok", "sample_rate": sample_rate})
+def _ok() -> httpx.Response:
+    # Bare 200: readiness is the status code alone; the body is the engine's.
+    return httpx.Response(200)
 
 
 def _loading() -> httpx.Response:
@@ -66,7 +68,6 @@ def test_adopts_already_healthy_server_without_spawning(
     )
 
     assert handle.owned is False
-    assert handle.sample_rate == 24000
     assert handle.base_url == "http://127.0.0.1:7861"
     popen.assert_not_called()
 
@@ -85,7 +86,7 @@ def test_spawns_when_nothing_listening_and_waits_through_loading(
         [
             _loading(),
             _loading(),
-            _ok(22050),
+            _ok(),
         ]
     )
     log_path = tmp_path / "sub" / "server.log"
@@ -97,7 +98,6 @@ def test_spawns_when_nothing_listening_and_waits_through_loading(
     )
 
     assert handle.owned is True
-    assert handle.sample_rate == 22050
     assert handle.process is fake_process
     popen.assert_called_once()
     spawned_args = popen.call_args.args[0]
@@ -117,14 +117,13 @@ def test_adopts_already_running_server_still_loading_on_first_check(
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
 
-    transport = _health_transport([_loading(), _loading(), _ok(24000)])
+    transport = _health_transport([_loading(), _loading(), _ok()])
     handle = sidecar.start_or_adopt(
         ["fake-command"], 7861, log_path=tmp_path / "server.log", transport=transport
     )
 
     assert handle.owned is False
     assert handle.process is None
-    assert handle.sample_rate == 24000
     popen.assert_not_called()
 
 
@@ -202,6 +201,33 @@ def test_timeout_raises_with_log_path_in_message(
     fake_process.terminate.assert_called_once()
 
 
+def test_spawned_server_that_exits_fails_fast_with_code_and_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_process = MagicMock(spec=subprocess.Popen)
+    # Running on the first check, exited ever after (the cleanup polls too).
+    fake_process.poll.side_effect = itertools.chain([None], itertools.repeat(1))
+    fake_process.returncode = 1
+    popen = MagicMock(return_value=fake_process)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(sidecar.time, "sleep", lambda _seconds: None)
+
+    # Never healthy; the hour-long timeout would hang the test if the exit
+    # went unnoticed.
+    transport = _spawn_then_transport([_loading()])
+    log_path = tmp_path / "server.log"
+    with pytest.raises(sidecar.SidecarError, match=r"exited with code 1") as exc_info:
+        sidecar.start_or_adopt(
+            ["fake-command"],
+            7861,
+            log_path=log_path,
+            policy=sidecar.SidecarPolicy(startup_timeout=3600.0),
+            transport=transport,
+        )
+
+    assert str(log_path) in str(exc_info.value)
+
+
 def test_timeout_keeps_spawned_process_terminated_not_adopted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -275,7 +301,6 @@ def test_close_terminates_owned_process() -> None:
     fake_process.poll.return_value = None
     handle = sidecar.SidecarHandle(
         base_url="http://127.0.0.1:7861",
-        sample_rate=24000,
         owned=True,
         process=fake_process,
         log_path=Path("/tmp/does-not-matter.log"),
@@ -291,7 +316,6 @@ def test_close_does_not_terminate_adopted_process() -> None:
     fake_process = MagicMock(spec=subprocess.Popen)
     handle = sidecar.SidecarHandle(
         base_url="http://127.0.0.1:7861",
-        sample_rate=24000,
         owned=False,
         process=fake_process,
         log_path=Path("/tmp/does-not-matter.log"),
@@ -307,7 +331,6 @@ def test_close_is_a_no_op_if_process_already_exited() -> None:
     fake_process.poll.return_value = 0
     handle = sidecar.SidecarHandle(
         base_url="http://127.0.0.1:7861",
-        sample_rate=24000,
         owned=True,
         process=fake_process,
         log_path=Path("/tmp/does-not-matter.log"),
@@ -324,7 +347,6 @@ def test_close_kills_if_terminate_does_not_exit_in_time() -> None:
     fake_process.wait.side_effect = [subprocess.TimeoutExpired(cmd="x", timeout=1), None]
     handle = sidecar.SidecarHandle(
         base_url="http://127.0.0.1:7861",
-        sample_rate=24000,
         owned=True,
         process=fake_process,
         log_path=Path("/tmp/does-not-matter.log"),

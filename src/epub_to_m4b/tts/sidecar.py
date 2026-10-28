@@ -1,21 +1,23 @@
-"""Lifecycle and busy-wait layer for any single-slot local inference server.
+"""Lifecycle and busy-wait layer for any local inference server.
 
 Self-hosted engines (e.g. Breeze) run as a separate HTTP process so this
 project never needs to import their heavy ML dependencies directly. This
 module is deliberately engine-agnostic: it knows nothing about any engine's
 request/response shapes, only that
 
-* ``GET {base_url}/health`` answers ``200 {"status": "ok", "sample_rate": N}``
-  once ready and ``503 {"status": "loading"}`` while starting up, and
-* the server serves one inference at a time and answers a fixed "busy"
-  status (409 by default) while another request is running.
+* ``GET {base_url}/health`` answers 200 once ready and anything else (e.g.
+  503) while starting up; the body is the engine's business, and
+* a single-slot server (e.g. Breeze) answers a fixed "busy" status (409 by
+  default) while another request is running. Servers that queue requests
+  (e.g. vLLM) never do, and their engines skip :func:`post_until_free`.
 
 Two pieces live here:
 
 * :func:`start_or_adopt` - spawn the server or adopt one already listening
   on the port, then block until it reports healthy. An adopted server is
   never killed by ``close()``.
-* :func:`post_until_free` - retry a request while the server answers busy.
+* :func:`post_until_free` - retry a request while a single-slot server
+  answers busy.
 
 All timing and retry knobs are grouped in :class:`SidecarPolicy` so every
 engine shares one vocabulary and tests can shrink the waits.
@@ -44,7 +46,7 @@ class SidecarError(EpubToM4bError):
 
 @dataclass(frozen=True)
 class SidecarPolicy:
-    """Timing and busy-wait rules for any single-slot local inference server."""
+    """Timing and busy-wait rules for any local inference server."""
 
     health_timeout: float = 2.0  # one /health request
     poll_interval: float = 2.0  # spacing between /health polls while starting
@@ -101,7 +103,6 @@ class SidecarHandle:
     """A local HTTP server we either spawned or adopted."""
 
     base_url: str
-    sample_rate: int
     owned: bool
     process: subprocess.Popen[bytes] | None
     log_path: Path
@@ -163,7 +164,6 @@ def start_or_adopt(
         if initial is not None and initial.status_code == httpx.codes.OK:
             return SidecarHandle(
                 base_url=base_url,
-                sample_rate=int(initial.json()["sample_rate"]),
                 owned=False,
                 process=None,
                 log_path=log_path,
@@ -187,12 +187,20 @@ def start_or_adopt(
                 if response is not None and response.status_code == httpx.codes.OK:
                     return SidecarHandle(
                         base_url=base_url,
-                        sample_rate=int(response.json()["sample_rate"]),
                         owned=owned,
                         process=process,
                         log_path=log_path,
                         policy=policy,
                     )
+
+                # A spawned server that exited will never answer: fail now
+                # rather than waiting out the whole startup timeout.
+                if process is not None and process.poll() is not None:
+                    raise SidecarError(
+                        f"server on port {port} exited with code {process.returncode} "
+                        f"before becoming healthy; see log at {log_path}"
+                    )
+
                 # A non-200 response (e.g. 503 loading) or connection failure
                 # both mean "keep waiting" here - only a 200 ends the wait.
                 time.sleep(policy.poll_interval)

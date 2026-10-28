@@ -565,6 +565,49 @@ def test_batch_size_clamped_to_server_max_batch_texts(tmp_path: Path) -> None:
     assert [len(json.loads(f["texts"])) for f in batch_fields] == [2, 2, 1]
 
 
+def test_sample_rate_comes_from_health_body(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response(22050)
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(200, content=_pcm_bytes(1.0, sample_rate=22050))
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    engine = BreezeEngine(_config(tmp_path), transport=_mock_transport(handler))
+    engine.close()
+
+    assert engine.sample_rate == 22050
+
+
+@pytest.mark.parametrize("body", [{"status": "ok"}, {"sample_rate": 0}, None])
+def test_health_without_sample_rate_raises_clear_error(
+    tmp_path: Path, body: dict[str, object] | None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200) if body is None else httpx.Response(200, json=body)
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    with pytest.raises(TTSError, match=r"/health.*sample_rate.*breeze-tts-server"):
+        BreezeEngine(_config(tmp_path), transport=httpx.MockTransport(handler))
+
+
+def test_health_transport_error_after_adopting_raises_tts_error(tmp_path: Path) -> None:
+    calls = {"health": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            calls["health"] += 1
+            # The sidecar's readiness check passes; the sample-rate read times out.
+            if calls["health"] == 1:
+                return _health_response()
+            raise httpx.ReadTimeout("timed out")
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    with pytest.raises(TTSError, match=r"GET .*/health failed: ReadTimeout"):
+        BreezeEngine(_config(tmp_path), transport=httpx.MockTransport(handler))
+
+
 def test_server_without_model_route_raises_clear_error(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
@@ -635,3 +678,20 @@ def test_fingerprint_ignores_model_path_in_command(tmp_path: Path) -> None:
     moved = _config(tmp_path, command=["breeze-infer-api", "/elsewhere/breeze-tts-2"])
     repo = _config(tmp_path, command=["breeze-infer-api", "BreezeBlue/Breeze-TTS-2"])
     assert _fingerprint(local) == _fingerprint(moved) == _fingerprint(repo)
+
+
+@pytest.mark.parametrize(
+    ("server_seconds", "expected"),
+    [
+        # A short server cap bounds max_chars to what it can finish...
+        (12.0, guard.max_chars_within(12.0, guard.DEFAULT_RUNAWAY_POLICY)),
+        # ...and a long one stops at the lockstep ceiling.
+        (600.0, 300),
+    ],
+)
+def test_max_chars_follows_server_cap_up_to_ceiling(
+    tmp_path: Path, server_seconds: float, expected: int
+) -> None:
+    transport = _ready_transport([], max_new_tokens=int(server_seconds * _FRAME_RATE))
+    with BreezeEngine(_config(tmp_path), transport=transport) as engine:
+        assert engine.max_chars == expected

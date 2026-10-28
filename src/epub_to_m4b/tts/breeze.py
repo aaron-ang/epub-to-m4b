@@ -2,9 +2,9 @@
 
 Contract of the sidecar (upstream ``breeze_infer/api.py`` in the
 ``breeze-tts`` project, plus ``GET /v1/model`` for model facts added by its
-``breeze-tts-server`` wrapper): ``GET /health`` for readiness/sample rate, ``POST
-/v1/audio/speech`` for a single non-batched clip (used here only to
-bootstrap the one-time reference voice), and ``POST /v1/audio/speech/batch``
+``breeze-tts-server`` wrapper): ``GET /health`` for readiness and
+``{"sample_rate": N}``, ``POST /v1/audio/speech`` for a single non-batched clip (used here
+only to bootstrap the one-time reference voice), and ``POST /v1/audio/speech/batch``
 for everything else - texts as a JSON-encoded array, response body the
 concatenation of every segment's s16le PCM with ``X-Segment-Bytes`` giving
 each segment's length. The server serves one inference at a time and
@@ -30,7 +30,7 @@ from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest, pcm16_to_float32
 from epub_to_m4b.tts.guard import DEFAULT_RUNAWAY_POLICY, RunawayPolicy
-from epub_to_m4b.tts.http import TTSError
+from epub_to_m4b.tts.http import TTSError, request_once
 from epub_to_m4b.tts.sidecar import (
     DEFAULT_SIDECAR_POLICY,
     SidecarHandle,
@@ -45,6 +45,11 @@ _DEFAULT_INSTRUCTION = "A clear, neutral adult narrator voice with a calm, stead
 # Fixed reference text read once to bootstrap a consistent narrator voice;
 # without a reference, Breeze samples a new voice per call.
 _REFERENCE_TEXT = "This is a clear, steady voice reading aloud for narration."
+# Ceiling on Breeze's max_chars. A batch decodes in lockstep until its
+# longest text finishes, so one long sentence keeps every shorter one's slot
+# idle; past about 300 characters that stall outweighs keeping the sentence
+# whole.
+_MAX_CHARS = 300
 # Breeze's server uses triton, which needs ptxas on its path. A Breeze/CUDA
 # detail, so it lives here rather than in the engine-agnostic tts/sidecar.py.
 _SIDECAR_ENV = {"TRITON_PTXAS_PATH": "/usr/local/cuda/bin/ptxas"}
@@ -168,11 +173,6 @@ class BreezeEngine(TTSEngine):
     _reference_text: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        client_kwargs: dict[str, httpx.BaseTransport] = {}
-        if self.transport is not None:
-            client_kwargs["transport"] = self.transport
-        self._client = httpx.Client(**client_kwargs)  # type: ignore[arg-type]
-
         log_path = self.config.cache_dir / f"breeze-server-{self.config.port}.log"
         self._sidecar = start_or_adopt(
             self.config.command,
@@ -183,30 +183,57 @@ class BreezeEngine(TTSEngine):
             env={k: v for k, v in _SIDECAR_ENV.items() if k not in os.environ},
             transport=self.transport,
         )
-        self.sample_rate = self._sidecar.sample_rate
+        client_kwargs: dict[str, httpx.BaseTransport] = {}
+        if self.transport is not None:
+            client_kwargs["transport"] = self.transport
+        self._client = httpx.Client(**client_kwargs)  # type: ignore[arg-type]
         try:
+            self.sample_rate = self._fetch_sample_rate()
             self.server = self._fetch_server_info()
             # The orchestrator sizes each synthesize() call by max_batch; leaving
             # the ABC default of 1 would feed the GPU one sentence per request.
             self.max_batch = min(self.config.batch_size, self.server.max_batch_texts)
             self.retries = self.runaway.retries
+            # The server's max_new_tokens bounds even an uncapped reseed, so a
+            # text whose real speech could outlast it is cut before sending.
+            server_seconds = self.server.max_new_tokens / self.server.frame_rate
+            self.max_chars = min(_MAX_CHARS, guard.max_chars_within(server_seconds, self.runaway))
             self._reference_wav, self._reference_text = self._load_or_create_reference_voice()
         except BaseException:
             self._client.close()
             self._sidecar.close()
             raise
 
+    def _fetch_sample_rate(self) -> int:
+        base_url = self._sidecar.base_url
+        response = request_once(
+            self._client, "GET", f"{base_url}/health", timeout=self.policy.request_timeout
+        )
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        sample_rate = _positive_int(body.get("sample_rate")) if isinstance(body, dict) else None
+        if response.status_code != httpx.codes.OK or sample_rate is None:
+            raise _wrong_server(base_url, "GET /health did not report a positive sample_rate")
+
+        return sample_rate
+
     def _fetch_server_info(self) -> ServerInfo:
         base_url = self._sidecar.base_url
-        response = self._client.get(f"{base_url}/v1/model", timeout=self.policy.request_timeout)
+        response = request_once(
+            self._client, "GET", f"{base_url}/v1/model", timeout=self.policy.request_timeout
+        )
         if response.status_code != httpx.codes.OK:
             raise _wrong_server(base_url, f"GET /v1/model answered {response.status_code}")
+
         try:
             body = response.json()
         except ValueError:
             body = None
         if not isinstance(body, dict):
             raise _wrong_server(base_url, "GET /v1/model did not return a JSON object")
+
         return ServerInfo.from_model_body(body, base_url)
 
     def _load_or_create_reference_voice(self) -> tuple[Path, str]:

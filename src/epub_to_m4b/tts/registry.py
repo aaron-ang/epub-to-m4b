@@ -1,7 +1,7 @@
 """Engine name -> factory lookup used by the CLI's ``--engine`` flag.
 
 Every factory takes the same ``AppConfig`` and returns a ``TTSEngine`` - one
-signature for engines that need config (breeze, openai, elevenlabs), ones
+signature for engines that need config (breeze, drama, openai, elevenlabs), ones
 that default fully (deepgram) and ones that ignore it (silence/tone). The
 hosted API factories are also the only place API keys are read from the
 environment: each ``*Config`` names its variable via ``api_key_env`` and the
@@ -18,6 +18,7 @@ from epub_to_m4b.config import AppConfig, ConfigError
 from epub_to_m4b.tts.base import TTSEngine
 from epub_to_m4b.tts.breeze import BreezeEngine
 from epub_to_m4b.tts.deepgram import DeepgramConfig, DeepgramEngine
+from epub_to_m4b.tts.drama import DramaEngine
 from epub_to_m4b.tts.elevenlabs import ElevenLabsEngine
 from epub_to_m4b.tts.fake import SilenceEngine, ToneEngine
 from epub_to_m4b.tts.openai_compat import OpenAIEngine
@@ -50,6 +51,12 @@ def _api_key(api_key_env: str, engine_name: str) -> str:
     return key
 
 
+def _drama_factory(config: AppConfig) -> TTSEngine:
+    if config.drama is None:
+        raise _missing_table(DramaEngine.name, "command, reference_audio, reference_text")
+    return DramaEngine(config.drama)
+
+
 def _openai_factory(config: AppConfig) -> TTSEngine:
     if config.openai is None:
         raise _missing_table(OpenAIEngine.name, "base_url, model, voice")
@@ -75,6 +82,7 @@ _ENGINES: dict[str, Callable[[AppConfig], TTSEngine]] = {
     SilenceEngine.name: lambda _config: SilenceEngine(),
     ToneEngine.name: lambda _config: ToneEngine(),
     BreezeEngine.name: _breeze_factory,
+    DramaEngine.name: _drama_factory,
     OpenAIEngine.name: _openai_factory,
     ElevenLabsEngine.name: _elevenlabs_factory,
     DeepgramEngine.name: _deepgram_factory,

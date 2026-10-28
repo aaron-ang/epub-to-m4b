@@ -94,6 +94,54 @@ def test_load_config_unknown_breeze_key_raises(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_load_config_merges_drama_table_over_defaults(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "config.toml",
+        """
+        [engine.drama]
+        command = ["vllm", "serve", "fishaudio/drama-3", "--omni"]
+        reference_audio = "~/voice.wav"
+        reference_text = "Hello there."
+        batch_size = 32
+        """,
+    )
+    config = load_config(path, cache_dir=tmp_path / "cache")
+    assert config.drama is not None
+    assert config.drama.command == ["vllm", "serve", "fishaudio/drama-3", "--omni"]
+    assert config.drama.reference_audio == Path("~/voice.wav").expanduser()
+    assert config.drama.reference_text == "Hello there."
+    assert config.drama.batch_size == 32
+    assert config.drama.model == "fishaudio/drama-3"
+    assert config.drama.port == 8091
+    assert config.drama.cache_dir == tmp_path / "cache"
+
+
+def test_load_config_drama_table_missing_reference_voice_raises(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "config.toml",
+        """
+        [engine.drama]
+        command = ["vllm"]
+        """,
+    )
+    with pytest.raises(ConfigError, match="reference_audio, reference_text"):
+        load_config(path)
+
+
+def test_load_config_drama_empty_command_raises(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "config.toml",
+        """
+        [engine.drama]
+        command = []
+        reference_audio = "voice.wav"
+        reference_text = "Hello."
+        """,
+    )
+    with pytest.raises(ConfigError, match=r"\[engine\.drama\]\.command must be a non-empty"):
+        load_config(path)
+
+
 def test_load_config_explicit_missing_path_raises(tmp_path: Path) -> None:
     missing = tmp_path / "definitely-not-here.toml"
     with pytest.raises(ConfigError, match="not found"):

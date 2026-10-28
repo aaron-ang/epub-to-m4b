@@ -69,6 +69,7 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 | `sample_rate: int`                                  | attribute        | Output sample rate of every clip                               |
 | `max_batch: int = 1`                                | attribute        | Texts per `synthesize()` call                                  |
 | `max_concurrency: int = 1`                          | attribute        | Parallel `synthesize()` calls; `> 1` fans out over a thread pool |
+| `max_chars: int = DEFAULT_MAX_CHARS`                | attribute        | Longest clip text; only a longer sentence is cut (at a comma, else a space) |
 | `retries: int = 0`                                  | attribute        | Reseeds per clip `clip_miss` rejects; `0` disables retries     |
 | `synthesize(texts: Sequence[str]) -> list[AudioClip]` | abstract method | One clip per input text, same order                            |
 | `fingerprint() -> str`                              | abstract method  | Digest of engine + model + voice + params; clip cache partition |
@@ -76,18 +77,19 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 | `resynthesize(texts, retry_round, *, capped) -> list[AudioClip]` | method | Fresh takes for retry round 1, 2, ...; `synth/retry.py` queues rejected clips and sends them in full `max_batch` batches (the rest after the first pass), capped, plus one uncapped round for a text whose every take hit the cap |
 | `close() -> None`                                   | method           | Release resources; `__exit__` calls it                         |
 
-| Engine       | Config table          | `max_batch`   | `max_concurrency` |
-|--------------|-----------------------|---------------|-------------------|
-| `silence`    | none                  | 1             | 1                 |
-| `tone`       | none                  | 1             | 1                 |
-| `breeze`     | required              | `min(batch_size, max_batch_texts)` | 1            |
-| `openai`     | required              | 1             | 4                 |
-| `elevenlabs` | required              | 1             | 2                 |
-| `deepgram`   | optional (all defaults) | 1           | 4                 |
+| Engine       | Config table          | `max_batch`   | `max_concurrency` | `max_chars` |
+|--------------|-----------------------|---------------|-------------------|-------------|
+| `silence`    | none                  | 1             | 1                 | 125 |
+| `tone`       | none                  | 1             | 1                 | 125 |
+| `breeze`     | required              | `min(batch_size, max_batch_texts)` | 1            | `min(300, longest text whose retry limit fits the server's max_new_tokens)` |
+| `openai`     | required              | 1             | 4                 | 1000 |
+| `elevenlabs` | required              | 1             | 2                 | 1000 |
+| `deepgram`   | optional (all defaults) | 1           | 4                 | 1000 |
+| `drama`      | required              | `batch_size`  | 2 (each batch posts its texts concurrently) | longest text whose retry limit fits the context left after its prompt (~2300 at 8192) |
 
-Sidecar engines call `start_or_adopt(command, port, log_path=..., policy=SidecarPolicy(...), env=...)` and wrap busy-prone POSTs in `post_until_free(send, policy=..., on_busy=...)`.
+Sidecar engines call `start_or_adopt(command, port, log_path=..., policy=SidecarPolicy(...), env=...)`; a 200 from `GET /health` means ready, and the body belongs to the engine. Single-slot servers (Breeze) answer 409 while busy, so their POSTs go through `post_until_free(send, policy=..., on_busy=...)`; queueing servers (vLLM-Omni) skip it.
 
-API engines (`openai_compat`, `elevenlabs`, `deepgram`) share `tts/http.py`: retry with backoff on transport errors and 408/429/5xx, honour `Retry-After`, raise `TTSError` after exhausting retries.
+API engines (`openai_compat`, `elevenlabs`, `deepgram`) share `tts/http.py`: retry with backoff on transport errors and 408/429/5xx, honour `Retry-After`, raise `TTSError` after exhausting retries. Sidecar engines send setup requests through `request_once` there: no retry, a transport failure raises `TTSError`.
 
 Sidecar engines write `<name>-server-<port>.log` under `cache_dir`.
 
@@ -96,6 +98,7 @@ Engine notes:
 | Engine                             | Notes                                                                                                                                          |
 |------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `breeze`                           | Model is the last `command` arg (local dir or HF repo id, resolved by breeze-tts); server started with `breeze-tts-server`; `GET /v1/model` reports `frame_rate`, `model_digest`, `max_new_tokens`, `max_batch_texts` (`ServerInfo`; 404 or bad field = wrong server); fingerprint uses `model_digest` + reference wav hash; first-pass token cap from `frame_rate`, clamped to `max_new_tokens`, `resynthesize` uses seed + round, capped like the first pass unless `capped=False`; `clip_miss` is the duration window (never cuts) from `tts/guard.py` via `RunawayPolicy`; 409 busy-wait via `SidecarPolicy` |
+| `drama`                            | Fish Audio Drama 3 on `vllm serve <model> --omni` (vLLM-Omni); `GET /v1/models` must list `model` with its `max_model_len` (else wrong server); each request's budget is `max_model_len` minus its prompt rows (reference frames + transcript + text chars + `_TEMPLATE_ROWS`); reference voice uploaded once via `POST /v1/audio/voices` as `e2m-<digest of audio + transcript>` (skipped when `GET /v1/audio/voices` lists it), so the server encodes it once; one text per `POST /v1/audio/speech` with `voice`, `seed`, `max_new_tokens` (codec frames, 44100/2048 Hz), `response_format=pcm`; `synthesize` posts a batch's texts concurrently and the server batches them on the GPU; per-text token cap from `tts/guard.py` clamped to that budget, uncapped reseeds get the whole budget, `resynthesize` uses seed + round; fingerprint uses `model`, reference wav hash + text, seed; no busy-wait |
 | `openai`, `elevenlabs`, `deepgram` | `tts/http.py` retry                                                                                                                            |
 | `silence`, `tone`                  | none                                                                                                                                           |
 
@@ -155,7 +158,8 @@ Every threshold or default lives as a named module constant next to a comment ex
 | Constant | Module | Meaning |
 |----------|--------|---------|
 | `PROGRESS_STEP_PERCENT` | `progress.py` | Percent of batches / encoded audio between progress lines |
-| `DEFAULT_MAX_CHARS` | `text/split.py` | Longest clip text handed to an engine |
+| `DEFAULT_MAX_CHARS` | `text/split.py` | Longest clip text for an engine that sets no `max_chars` |
+| `DEFAULT_FILL_CHARS` | `text/split.py` | Budget for packing short consecutive sentences into one clip |
 | `DEFAULT_TOC_DEPTH` | `epub/chapters.py` | TOC nesting level that starts a chapter |
 | `DEFAULT_MIN_CHARS` | `epub/chapters.py` | Body chars below which a chapter is a stub and merges |
 | `MIN_TOC_COVERAGE` | `epub/chapters.py` | Fraction of text docs the TOC must cover before it is trusted over headings |
@@ -168,6 +172,10 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause / paragraph / heading and chapter end |
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |
 | `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size (clamped to server `max_batch_texts`) |
+| `DRAMA_SIDECAR_POLICY` | `tts/drama.py` | Startup timeout for the ~10 min vLLM-Omni cold start; per-request timeout behind the server queue |
+| `_TEMPLATE_ROWS` | `tts/drama.py` | Prompt rows allowed for the chat template on top of reference, transcript and text |
+| `_MAX_CHARS` | `tts/breeze.py` | Ceiling on Breeze's `max_chars` (lockstep batches stall behind one long text) |
+| `_MAX_CHARS` | `tts/openai_compat.py`, `tts/elevenlabs.py`, `tts/deepgram.py` | Longest sentence sent uncut to the API |
 | `_SIDECAR_ENV` | `tts/breeze.py` | Env vars the Breeze server child gets when spawned (`TRITON_PTXAS_PATH`) |
 | `RunawayPolicy` defaults | `tts/guard.py` | Retry limit (base + per-char seconds), short limit (per-char floor above `min_chars`), first-pass token cap slack, reseed attempts |
 | `SidecarPolicy` defaults | `tts/sidecar.py` | Health/poll/startup/terminate timeouts, single-request and batch timeouts, busy status + total busy wait + retry spacing |

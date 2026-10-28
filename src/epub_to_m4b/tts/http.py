@@ -1,4 +1,5 @@
-"""Retrying POST helper shared by the HTTP API engines.
+"""HTTP helpers shared by the TTS engines: a retrying POST for hosted APIs,
+a single request for local servers, and PCM decoding.
 
 Every hosted TTS API fails the same few ways - a dropped connection, a
 timeout, a 429 when the account's rate limit trips, a 5xx while the
@@ -134,6 +135,20 @@ def post_with_retry(
     raise TTSError(
         f"POST {url} failed after {policy.max_retries + 1} attempts, last {detail}"
     ) from last_error
+
+
+def request_once(
+    client: httpx.Client, method: str, url: str, *, timeout: float, **kwargs: Any
+) -> httpx.Response:
+    """Send one request with no retry; a transport failure raises ``TTSError``.
+
+    For local servers, where a dropped connection means the server died
+    rather than a blip worth retrying. Any status is returned to the caller.
+    """
+    try:
+        return client.request(method, url, timeout=timeout, **kwargs)
+    except httpx.TransportError as exc:
+        raise TTSError(f"{method} {url} failed: {type(exc).__name__}: {exc}") from exc
 
 
 def pcm_response_to_clip(response: httpx.Response, sample_rate: int) -> AudioClip:

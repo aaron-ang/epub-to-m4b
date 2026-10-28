@@ -7,15 +7,15 @@ Resolution order for *which* file to read (first match wins):
 3. ``~/.config/epub-to-m4b/config.toml`` (fine if it doesn't exist)
 
 Only ``[engine.<name>]`` tables are understood. Each engine keeps its own
-frozen config dataclass (``BreezeConfig``, ``OpenAIConfig``,
+frozen config dataclass (``BreezeConfig``, ``DramaConfig``, ``OpenAIConfig``,
 ``ElevenLabsConfig``, ``DeepgramConfig``) and ``AppConfig`` carries one
 optional field per engine. ``_build_engine_config`` merges a TOML table onto
 any of those dataclasses, driven by its declared fields and annotations:
 unknown keys, missing required keys, and values of the wrong TOML type all
 raise ``ConfigError`` with the section and key named, rather than letting a
 bare TypeError/KeyError reach the user as a stack trace or a ``str`` land
-on an ``int`` field. Per-engine quirks (breeze's non-empty command check
-and injected cache_dir) are passed in as arguments, not special-cased
+on an ``int`` field. Per-engine quirks (the sidecar engines' non-empty
+command check and injected cache_dir) are passed in as arguments, not special-cased
 inside the builder.
 """
 
@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, get_args, get_origin, get_type_hints
 from epub_to_m4b.errors import EpubToM4bError
 from epub_to_m4b.tts.breeze import BreezeConfig
 from epub_to_m4b.tts.deepgram import DeepgramConfig
+from epub_to_m4b.tts.drama import DramaConfig
 from epub_to_m4b.tts.elevenlabs import ElevenLabsConfig
 from epub_to_m4b.tts.openai_compat import OpenAIConfig
 
@@ -48,6 +49,7 @@ DEFAULT_CONFIG_PATH = Path("~/.config/epub-to-m4b/config.toml").expanduser()
 DEFAULT_CACHE_DIR = Path("~/.cache/epub-to-m4b").expanduser()
 
 _BREEZE_REQUIRED = ("command",)
+_DRAMA_REQUIRED = ("command", "reference_audio", "reference_text")
 _OPENAI_REQUIRED = ("base_url", "model", "voice")
 _ELEVENLABS_REQUIRED = ("voice_id",)
 
@@ -68,6 +70,7 @@ class AppConfig:
     """
 
     breeze: BreezeConfig | None = None
+    drama: DramaConfig | None = None
     openai: OpenAIConfig | None = None
     elevenlabs: ElevenLabsConfig | None = None
     deepgram: DeepgramConfig | None = None
@@ -119,10 +122,13 @@ def _sub_table(data: Mapping[str, object], *keys: str) -> Mapping[str, object] |
     return node if isinstance(node, Mapping) else None
 
 
-def _coerce_command(raw_value: object) -> object:
-    if not isinstance(raw_value, list) or not raw_value:
-        raise ConfigError("[engine.breeze].command must be a non-empty array of strings")
-    return raw_value
+def _command_coercer(section: str) -> Callable[[object], object]:
+    def coerce(raw_value: object) -> object:
+        if not isinstance(raw_value, list) or not raw_value:
+            raise ConfigError(f"[engine.{section}].command must be a non-empty array of strings")
+        return raw_value
+
+    return coerce
 
 
 def _check_type(section: str, key: str, value: object, annotation: object) -> object:
@@ -209,11 +215,26 @@ def _build_breeze_config(table: Mapping[str, object], *, cache_dir: Path) -> Bre
         BreezeConfig,
         section="breeze",
         required=_BREEZE_REQUIRED,
-        coerce={"command": _coerce_command},
+        coerce={"command": _command_coercer("breeze")},
         extra={"cache_dir": cache_dir},
         missing_hint=(
             " - breeze ships no default command, so it must be fully configured before "
             "it can be selected with --engine breeze"
+        ),
+    )
+
+
+def _build_drama_config(table: Mapping[str, object], *, cache_dir: Path) -> DramaConfig:
+    return _build_engine_config(
+        table,
+        DramaConfig,
+        section="drama",
+        required=_DRAMA_REQUIRED,
+        coerce={"command": _command_coercer("drama")},
+        extra={"cache_dir": cache_dir},
+        missing_hint=(
+            " - drama needs the server command and the reference voice to clone "
+            "before it can be selected with --engine drama"
         ),
     )
 
@@ -231,6 +252,7 @@ def load_config(cli_path: Path | None, *, cache_dir: Path = DEFAULT_CACHE_DIR) -
     path = resolve_config_path(cli_path)
     data = _load_toml(path, explicit=_is_explicit(cli_path))
     breeze_table = _sub_table(data, "engine", "breeze")
+    drama_table = _sub_table(data, "engine", "drama")
     openai_table = _sub_table(data, "engine", "openai")
     elevenlabs_table = _sub_table(data, "engine", "elevenlabs")
     deepgram_table = _sub_table(data, "engine", "deepgram")
@@ -238,6 +260,11 @@ def load_config(cli_path: Path | None, *, cache_dir: Path = DEFAULT_CACHE_DIR) -
         breeze=(
             _build_breeze_config(breeze_table, cache_dir=cache_dir)
             if breeze_table is not None
+            else None
+        ),
+        drama=(
+            _build_drama_config(drama_table, cache_dir=cache_dir)
+            if drama_table is not None
             else None
         ),
         openai=(

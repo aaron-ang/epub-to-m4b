@@ -30,6 +30,7 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 | `.github/workflows/` | CI + release                                                   |
 | `pyproject.toml`     | Deps, pixi workspace + tasks, ruff, mypy, pytest markers + `addopts` |
 | `pixi.lock`          | Locked conda-forge + PyPI environment for every pixi platform  |
+| `renovate.json`      | Renovate: weekly dependency PRs + `pixi.lock` maintenance; pynini/openfst pinned |
 
 ## Conventions
 

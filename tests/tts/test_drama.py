@@ -20,6 +20,9 @@ _SAMPLE_RATE = 44100
 _FRAME_RATE = _SAMPLE_RATE / 2048
 _MODEL = "fishaudio/drama-3"
 _MAX_MODEL_LEN = 8192
+_MAX_NEW_TOKENS = 4096
+# A context whose room after any test prompt stays under _MAX_NEW_TOKENS.
+_SMALL_MODEL_LEN = 2048
 _REF_SECONDS = 2.0
 
 
@@ -88,7 +91,12 @@ def _transport(
     return httpx.MockTransport(handler)
 
 
-def _recording(bodies: list[dict[str, object]], seconds: float = 1.0) -> httpx.MockTransport:
+def _recording(
+    bodies: list[dict[str, object]],
+    seconds: float = 1.0,
+    *,
+    max_model_len: object = _MAX_MODEL_LEN,
+) -> httpx.MockTransport:
     lock = threading.Lock()
 
     def speech(body: dict[str, object]) -> httpx.Response:
@@ -96,7 +104,7 @@ def _recording(bodies: list[dict[str, object]], seconds: float = 1.0) -> httpx.M
             bodies.append(body)
         return httpx.Response(200, content=_pcm(seconds))
 
-    return _transport(speech)
+    return _transport(speech, max_model_len=max_model_len)
 
 
 def test_synthesize_sends_one_cloned_request_per_text_in_order(tmp_path: Path) -> None:
@@ -305,21 +313,52 @@ def _prompt_rows(text: str) -> int:
 
 def test_uncapped_reseed_gets_all_the_context_left(tmp_path: Path) -> None:
     bodies: list[dict[str, object]] = []
+    transport = _recording(bodies, max_model_len=_SMALL_MODEL_LEN)
+    with DramaEngine(_config(tmp_path), transport=transport) as engine:
+        engine.resynthesize(["again"], 1, capped=False)
+    assert bodies[0]["max_new_tokens"] == _SMALL_MODEL_LEN - _prompt_rows("again")
+
+
+def test_uncapped_reseed_never_asks_past_the_server_cap(tmp_path: Path) -> None:
+    # 8192 rows leave far more than the server accepts as max_new_tokens.
+    assert _MAX_MODEL_LEN - _prompt_rows("again") > _MAX_NEW_TOKENS
+    bodies: list[dict[str, object]] = []
     with DramaEngine(_config(tmp_path), transport=_recording(bodies)) as engine:
         engine.resynthesize(["again"], 1, capped=False)
-    assert bodies[0]["max_new_tokens"] == _MAX_MODEL_LEN - _prompt_rows("again")
+    assert bodies[0]["max_new_tokens"] == _MAX_NEW_TOKENS
 
 
-def test_max_chars_is_the_longest_text_that_fits_the_context(tmp_path: Path) -> None:
+@pytest.mark.parametrize("max_model_len", [_SMALL_MODEL_LEN, _MAX_MODEL_LEN])
+def test_max_chars_is_the_longest_text_that_fits(tmp_path: Path, max_model_len: int) -> None:
     policy = guard.DEFAULT_RUNAWAY_POLICY
 
     def frames(chars: int) -> int:
         return math.ceil(guard.retry_limit_seconds("x" * chars, policy) * _FRAME_RATE)
 
-    with DramaEngine(_config(tmp_path), transport=_transport()) as engine:
+    def room(chars: int) -> int:
+        # Sized for 4-byte characters: each is four prompt rows.
+        return min(max_model_len - _prompt_rows("x" * 4 * chars), _MAX_NEW_TOKENS)
+
+    transport = _transport(max_model_len=max_model_len)
+    with DramaEngine(_config(tmp_path), transport=transport) as engine:
         n = engine.max_chars
-    assert frames(n) <= _MAX_MODEL_LEN - _prompt_rows("x" * n)
-    assert frames(n + 1) > _MAX_MODEL_LEN - _prompt_rows("x" * (n + 1))
+    assert frames(n) <= room(n)
+    assert frames(n + 1) > room(n + 1)
+
+
+@pytest.mark.parametrize("char", ["x", "你", "\U0001f600"])
+def test_longest_text_in_any_script_gets_room_for_its_retry_limit(
+    tmp_path: Path, char: str
+) -> None:
+    bodies: list[dict[str, object]] = []
+    with DramaEngine(_config(tmp_path), transport=_recording(bodies)) as engine:
+        text = char * engine.max_chars
+        engine.synthesize([text])
+        engine.resynthesize([text], 1, capped=False)
+    capped, uncapped = (int(str(body["max_new_tokens"])) for body in bodies)
+    limit = math.ceil(guard.retry_limit_seconds(text, guard.DEFAULT_RUNAWAY_POLICY) * _FRAME_RATE)
+    assert capped <= _MAX_NEW_TOKENS
+    assert limit <= uncapped <= _MAX_NEW_TOKENS
 
 
 def test_capped_request_never_asks_past_the_context(tmp_path: Path) -> None:
@@ -362,9 +401,10 @@ def test_undecodable_reference_raises_naming_the_path(tmp_path: Path) -> None:
 def test_non_ascii_text_budgets_by_utf8_bytes(tmp_path: Path) -> None:
     bodies: list[dict[str, object]] = []
     text = "你好"  # two characters, six UTF-8 bytes
-    with DramaEngine(_config(tmp_path), transport=_recording(bodies)) as engine:
+    transport = _recording(bodies, max_model_len=_SMALL_MODEL_LEN)
+    with DramaEngine(_config(tmp_path), transport=transport) as engine:
         engine.resynthesize([text], 1, capped=False)
-    assert bodies[0]["max_new_tokens"] == _MAX_MODEL_LEN - _prompt_rows("x" * 6)
+    assert bodies[0]["max_new_tokens"] == _SMALL_MODEL_LEN - _prompt_rows("x" * 6)
 
 
 def test_context_too_small_for_any_text_raises(tmp_path: Path) -> None:

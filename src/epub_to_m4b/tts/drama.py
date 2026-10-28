@@ -54,6 +54,14 @@ _FRAME_RATE = _SAMPLE_RATE / 2048
 # bounds. Prompt plus
 # max_new_tokens must fit the server's max_model_len, or it answers 400.
 _TEMPLATE_ROWS = 256
+# vLLM-Omni's speech endpoint answers 400 to max_new_tokens above this
+# (TTSModelAdapter.max_new_tokens_max), whatever room the context has left. No
+# endpoint reports it, so it is fixed here.
+_MAX_NEW_TOKENS = 4096
+# max_chars counts characters but the prompt counts bytes, so it is sized
+# for text that is all 4-byte UTF-8 characters, the most a character takes.
+_MAX_UTF8_BYTES = 4
+_WIDEST_CHAR = "\U0001f600"
 # Speech requests resent after a reset connection. The same text and seed
 # give the same clip, so a resend is safe; a dead server fails it too.
 _SPEECH_RESENDS = 1
@@ -206,11 +214,13 @@ class DramaEngine(TTSEngine):
         )
 
     def _rows_for(self, text: str) -> int:
-        """Generation rows left for ``text`` after its prompt."""
-        return self._budget_rows - _rows(text)
+        """Generation rows left for ``text`` after its prompt, at most what
+        the server accepts as ``max_new_tokens``."""
+        return min(self._budget_rows - _rows(text), _MAX_NEW_TOKENS)
 
     def _longest_fitting_text(self, max_model_len: int) -> int:
-        """Longest text whose retry limit, in frames, fits beside its prompt.
+        """Longest text whose retry limit, in frames, fits beside its prompt,
+        whatever characters it holds.
 
         Real speech stays under its retry limit, so such a text can always
         finish within the context; a longer one is cut before sending.
@@ -218,13 +228,18 @@ class DramaEngine(TTSEngine):
         """
 
         def fits(chars: int) -> bool:
-            text = "x" * chars
+            text = _WIDEST_CHAR * chars
             frames = math.ceil(guard.retry_limit_seconds(text, self.runaway) * _FRAME_RATE)
             return frames <= self._rows_for(text)
 
-        # Both sides are linear in chars: solve, then step down past rounding.
-        per_char = 1 + self.runaway.seconds_per_char * _FRAME_RATE
-        chars = math.floor((self._budget_rows - self.runaway.base_seconds * _FRAME_RATE) / per_char)
+        # Both bounds are linear in chars: solve each, take the smaller, then
+        # step down past rounding. Each text byte is also a prompt row.
+        base = self.runaway.base_seconds * _FRAME_RATE
+        per_char = self.runaway.seconds_per_char * _FRAME_RATE
+        chars = min(
+            math.floor((self._budget_rows - base) / (per_char + _MAX_UTF8_BYTES)),
+            math.floor((_MAX_NEW_TOKENS - base) / per_char),
+        )
         while chars > 0 and not fits(chars):
             chars -= 1
         if chars < 1:
@@ -286,7 +301,7 @@ class DramaEngine(TTSEngine):
 
     def _speak(self, text: str, seed: int, capped: bool) -> AudioClip:
         # Requests are independent on the server, so each gets its own cap
-        # rather than the longest text's; uncapped means all the context left.
+        # rather than the longest text's; uncapped means all the room left.
         room = self._rows_for(text)
         tokens = (
             min(guard.max_new_tokens([text], self.runaway, _FRAME_RATE), room) if capped else room

@@ -1,8 +1,10 @@
 """Split a paragraph's normalized text into clip-sized pieces for the TTS engine.
 
-Cuts at sentence ends, force-cuts any sentence still over the limit at its
-best comma, semicolon or space, drops pieces with nothing to say, then fills
-each clip with consecutive pieces up to the limit.
+Cuts at sentence ends, force-cuts only a sentence longer than the engine's
+``max_chars`` at its best comma, semicolon or space, drops pieces with
+nothing to say, then packs consecutive short pieces into one clip up to
+``fill_chars``. Every clip therefore ends where a sentence ends, unless a
+single sentence is longer than the engine accepts.
 
 This module only produces raw text. The orchestrator wraps each string into a
 ``Sentence`` with a computed ``gap_after``; gaps between clips are its job.
@@ -21,11 +23,16 @@ from epub_to_m4b.book import Paragraph
 # a sentence's real terminator.
 CLOSERS = "\"')]\u201d\u2019"
 
-# Longest clip the splitter hands to an engine. Long enough to keep a full
-# clause's prosody in one clip; short enough that the Breeze runaway guard
-# (tts/guard.py scales its limits per character) stays tight and every
-# provider's per-request cap is far away.
+# Longest text handed to an engine unless the engine sets its own
+# ``max_chars``. A sentence over the limit is cut mid-sentence, and the
+# engine reads each piece as a finished utterance, so a cut sounds like the
+# sentence was truncated: engines that can take long texts raise it.
 DEFAULT_MAX_CHARS = 125
+
+# Short consecutive sentences are packed into one clip up to this many
+# characters, which keeps their prosody joined and saves requests. Packing
+# only joins whole sentences, so it never moves where a clip ends.
+DEFAULT_FILL_CHARS = 125
 
 # ! ? ; : or a full stop, plus any closers, followed by whitespace or the
 # end. A full stop after a lone capital ("J. K. Rowling", "S. Place") is a
@@ -71,6 +78,11 @@ def _fill(pieces: list[str], max_chars: int) -> list[str]:
     return clips
 
 
-def split_paragraph(paragraph: Paragraph, *, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
+def split_paragraph(
+    paragraph: Paragraph,
+    *,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    fill_chars: int = DEFAULT_FILL_CHARS,
+) -> list[str]:
     pieces = [c for s in _sentences(paragraph.text.strip()) for c in _cut_long(s, max_chars)]
-    return _fill([p for p in pieces if _speakable(p)], max_chars)
+    return _fill([p for p in pieces if _speakable(p)], min(fill_chars, max_chars))

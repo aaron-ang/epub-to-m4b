@@ -30,7 +30,7 @@ from epub_to_m4b.synth import cache
 from epub_to_m4b.synth.batching import PendingClip, make_batches
 from epub_to_m4b.synth.retry import RetryQueue, Settled
 from epub_to_m4b.text.normalize import normalize_all
-from epub_to_m4b.text.split import CLOSERS, split_paragraph
+from epub_to_m4b.text.split import CLOSERS, DEFAULT_MAX_CHARS, split_paragraph
 from epub_to_m4b.tts.base import TTSEngine
 
 
@@ -93,16 +93,22 @@ def _terminal_char(text: str) -> str:
 
 
 def book_to_sentences(
-    book: Book, *, policy: GapPolicy = _DEFAULT_POLICY, lang: str = "en"
+    book: Book,
+    *,
+    policy: GapPolicy = _DEFAULT_POLICY,
+    lang: str = "en",
+    max_chars: int = DEFAULT_MAX_CHARS,
 ) -> list[list[Sentence]]:
-    """Each chapter's sentences. The whole book is normalized in one call so
-    every CPU core gets an equal share of it."""
+    """Each chapter's sentences, none longer than ``max_chars`` (the
+    engine's). The whole book is normalized in one call so every CPU core
+    gets an equal share of it."""
     texts = iter(normalize_all([p.text for ch in book.chapters for p in ch.paragraphs], lang=lang))
     chapters: list[list[Sentence]] = []
     for idx, chapter in enumerate(book.chapters):
         flat: list[tuple[str, ParagraphKind, bool]] = []
         for paragraph in chapter.paragraphs:
-            pieces = split_paragraph(Paragraph(text=next(texts), kind=paragraph.kind))
+            normalized = Paragraph(text=next(texts), kind=paragraph.kind)
+            pieces = split_paragraph(normalized, max_chars=max_chars)
             last = len(pieces) - 1
             flat.extend((piece, paragraph.kind, i == last) for i, piece in enumerate(pieces))
         last_index = len(flat) - 1
@@ -168,13 +174,13 @@ def _plan_chapters(
     *,
     engine_fingerprint: str,
     sample_rate: int,
+    max_chars: int,
     policy: GapPolicy,
     lang: str,
 ) -> list[_ChapterPlan]:
     plans = []
-    for idx, (chapter, sentences) in enumerate(
-        zip(book.chapters, book_to_sentences(book, policy=policy, lang=lang), strict=True)
-    ):
+    chapter_sentences = book_to_sentences(book, policy=policy, lang=lang, max_chars=max_chars)
+    for idx, (chapter, sentences) in enumerate(zip(book.chapters, chapter_sentences, strict=True)):
         keys = tuple(cache.clip_cache_key(s.text) for s in sentences)
         gaps = tuple(s.gap_after for s in sentences)
         manifest = cache.current_chapter_manifest(
@@ -392,6 +398,7 @@ def synthesize_book(
         out_dir,
         engine_fingerprint=engine_fingerprint,
         sample_rate=sample_rate,
+        max_chars=engine.max_chars,
         policy=policy,
         lang=lang,
     )

@@ -165,3 +165,39 @@ def test_spaced_ellipsis_leaves_no_dot_only_clip() -> None:
     assert split_paragraph(_para(text)) == [
         '"Hm . yes, all is in a man\'s hands . that is an axiom."'
     ]
+
+
+# ---------------------------------------------------------------------------
+# engine max_chars vs fill_chars
+# ---------------------------------------------------------------------------
+
+_LONG = (
+    "When the long sentence finally reached the end of its winding clause, "
+    "the reader had long since forgotten how it began, and did not mind at all."
+)
+
+
+def test_sentence_under_max_chars_is_never_cut() -> None:
+    # Longer than the fill budget, shorter than the engine limit: one clip.
+    assert len(_LONG) > 125
+    assert split_paragraph(_para(_LONG), max_chars=600) == [_LONG]
+
+
+def test_sentence_over_max_chars_is_cut_at_a_comma() -> None:
+    pieces = split_paragraph(_para(_LONG), max_chars=100)
+    assert pieces[0].endswith(",")
+    assert all(len(p) <= 100 for p in pieces)
+
+
+def test_fill_packs_short_sentences_but_not_past_fill_chars() -> None:
+    text = f"One two. Three four. {_LONG}"
+    pieces = split_paragraph(_para(text), max_chars=600, fill_chars=20)
+    # The short pair packs; the long sentence stays whole and alone.
+    assert pieces == ["One two. Three four.", _LONG]
+
+
+def test_every_clip_ends_a_sentence_when_none_exceeds_max_chars() -> None:
+    text = f"{_LONG} Short one. {_LONG} Another short one."
+    pieces = split_paragraph(_para(text), max_chars=600)
+    assert all(p.endswith(".") for p in pieces)
+    assert " ".join(pieces) == text

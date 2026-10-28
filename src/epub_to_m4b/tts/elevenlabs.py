@@ -20,6 +20,9 @@ from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, post_with_ret
 
 # Rate encoded in the ``output_format=pcm_24000`` query parameter.
 _SAMPLE_RATE = 24000
+# Longest sentence sent uncut: under ElevenLabs' 5000-character request
+# limit, and longer than almost any sentence in a book.
+_MAX_CHARS = 1000
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,7 @@ class ElevenLabsEngine(TTSEngine):
 
     sample_rate: int = field(default=_SAMPLE_RATE, init=False)
     max_concurrency: int = field(default=2, init=False)
+    max_chars: int = field(default=_MAX_CHARS, init=False)
     _client: httpx.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:

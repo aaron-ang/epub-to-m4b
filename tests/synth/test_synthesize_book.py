@@ -261,3 +261,23 @@ def test_clip_vanishing_between_synthesis_and_assembly_is_a_clear_error(
             cache_dir=tmp_path / "cache",
             out_dir=tmp_path / "out",
         )
+
+
+def test_engine_max_chars_decides_where_sentences_are_cut(tmp_path: Path) -> None:
+    long = f"{_S1[:-1]}, and then it keeps going for quite a while longer, {_S2}"
+    book = make_book(
+        [
+            Chapter(
+                title="One",
+                paragraphs=(Paragraph(text=long, kind=ParagraphKind.BODY),),
+                source_ids=("c1",),
+            )
+        ],
+        title="Test Book",
+        author="Author",
+        source_sha256=_SHA,
+    )
+    engine = _RecordingEngine()
+    engine.max_chars = 600
+    synthesize_book(book, engine, cache_dir=tmp_path / "cache", out_dir=tmp_path / "out")
+    assert engine.synthesized_texts == [long]

@@ -40,7 +40,7 @@ from epub_to_m4b.synth.cache import (
 )
 from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
 from epub_to_m4b.text.normalize import normalize_all
-from epub_to_m4b.text.split import split_paragraph
+from epub_to_m4b.text.split import DEFAULT_MAX_CHARS, split_paragraph
 from epub_to_m4b.tts.registry import available_engines, create_engine
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -75,6 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--split",
         action="store_true",
         help="also show sentence boundaries (implies --normalized)",
+    )
+    dump.add_argument(
+        "--max-chars",
+        type=int,
+        default=DEFAULT_MAX_CHARS,
+        help="with --split, cut only sentences longer than this; match the engine's "
+        f"max_chars to see its clips (default: {DEFAULT_MAX_CHARS})",
     )
     dump.set_defaults(func=_cmd_dump_text)
 
@@ -193,7 +200,8 @@ def _cmd_dump_text(book: Book, args: argparse.Namespace) -> int:
             print(f"{prefix}{text}")
             if args.split:
                 sentence_paragraph = Paragraph(text=text, kind=p.kind)
-                for i, sentence in enumerate(split_paragraph(sentence_paragraph)):
+                pieces = split_paragraph(sentence_paragraph, max_chars=args.max_chars)
+                for i, sentence in enumerate(pieces):
                     print(f"    [{i}] {sentence}")
         print()
     return 0

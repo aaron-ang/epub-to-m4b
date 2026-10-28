@@ -114,3 +114,15 @@ def test_clip_miss_short_capped_clip_is_finite() -> None:
 def test_clip_miss_inside_window_is_zero() -> None:
     text = "a" * 40
     assert guard.clip_miss_seconds(_clip(3.0), text, _POLICY, capped=True) == 0.0
+
+
+def test_max_chars_within_inverts_retry_limit() -> None:
+    policy = guard.RunawayPolicy(base_seconds=2.0, seconds_per_char=0.1)
+    chars = guard.max_chars_within(32.0, policy)
+    assert chars == 300
+    assert guard.retry_limit_seconds("x" * chars, policy) <= 32.0
+    assert guard.retry_limit_seconds("x" * (chars + 1), policy) > 32.0
+
+
+def test_max_chars_within_never_below_one() -> None:
+    assert guard.max_chars_within(0.5, guard.DEFAULT_RUNAWAY_POLICY) == 1

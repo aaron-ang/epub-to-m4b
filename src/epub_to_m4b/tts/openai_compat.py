@@ -21,6 +21,9 @@ from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, post_with_ret
 
 # Rate of the raw PCM the API returns for ``response_format=pcm``.
 _SAMPLE_RATE = 24000
+# Longest sentence sent uncut: under OpenAI's 4096-character request
+# limit, and longer than almost any sentence in a book.
+_MAX_CHARS = 1000
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,7 @@ class OpenAIEngine(TTSEngine):
 
     sample_rate: int = field(default=_SAMPLE_RATE, init=False)
     max_concurrency: int = field(default=4, init=False)
+    max_chars: int = field(default=_MAX_CHARS, init=False)
     _client: httpx.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:

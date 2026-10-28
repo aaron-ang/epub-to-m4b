@@ -53,6 +53,15 @@ def retry_limit_seconds(text: str, policy: RunawayPolicy) -> float:
     return policy.base_seconds + policy.seconds_per_char * len(text)
 
 
+def max_chars_within(seconds: float, policy: RunawayPolicy) -> int:
+    """Longest text whose retry limit fits in ``seconds``.
+
+    Real speech stays under its retry limit, so a text this long or shorter
+    can always finish inside a generation cap of ``seconds``.
+    """
+    return max(1, math.floor((seconds - policy.base_seconds) / policy.seconds_per_char))
+
+
 def short_limit_seconds(text: str, policy: RunawayPolicy) -> float:
     """A clip shorter than this is retried with a fresh seed.
 

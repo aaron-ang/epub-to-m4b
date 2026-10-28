@@ -130,3 +130,14 @@ def test_empty_chapter_keeps_later_chapters_aligned() -> None:
         [],
         ["It cost three dollars in nineteen ninety nine."],
     ]
+
+
+def test_max_chars_keeps_a_long_sentence_whole() -> None:
+    long = f"{_S1[:-1]}, and then it keeps going for quite a while longer, {_S2}"
+    chapter = Chapter(
+        title="One",
+        paragraphs=(Paragraph(text=long, kind=ParagraphKind.BODY),),
+        source_ids=("c1",),
+    )
+    assert len(book_to_sentences(_book(chapter))[0]) > 1
+    assert [s.text for s in book_to_sentences(_book(chapter), max_chars=600)[0]] == [long]

@@ -20,6 +20,7 @@ import numpy as np
 import numpy.typing as npt
 
 from epub_to_m4b.book import AudioClip
+from epub_to_m4b.text.split import DEFAULT_MAX_CHARS
 
 _PCM16 = np.iinfo(np.int16)
 # Full-scale magnitude: float 1.0 maps to the int16 range's negative bound.
@@ -45,6 +46,8 @@ class TTSEngine(ABC):
     sample_rate: int
     max_batch: int = 1
     max_concurrency: int = 1
+    # Longest text per clip; a longer sentence is cut at a comma or space.
+    max_chars: int = DEFAULT_MAX_CHARS
     # Reseeds allowed per clip that ``clip_miss`` rejects; 0 disables retries.
     retries: int = 0
 

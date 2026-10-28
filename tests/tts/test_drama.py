@@ -397,3 +397,29 @@ def test_non_integer_sample_rate_header_raises_tts_error(tmp_path: Path) -> None
         pytest.raises(TTSError, match="fast Hz"),
     ):
         engine.synthesize(["hello"])
+
+
+def test_speech_is_resent_once_after_a_reset_connection(tmp_path: Path) -> None:
+    calls = [0]
+
+    def speech(_body: dict[str, object]) -> httpx.Response:
+        calls[0] += 1
+        if calls[0] == 1:
+            raise httpx.ReadError("[Errno 104] Connection reset by peer")
+        return httpx.Response(200, content=_pcm(1.0))
+
+    with DramaEngine(_config(tmp_path), transport=_transport(speech)) as engine:
+        (clip,) = engine.synthesize(["Hello there."])
+    assert round(clip.seconds, 2) == 1.0
+    assert calls[0] == 2
+
+
+def test_speech_reset_twice_raises(tmp_path: Path) -> None:
+    def speech(_body: dict[str, object]) -> httpx.Response:
+        raise httpx.ReadError("[Errno 104] Connection reset by peer")
+
+    with (
+        DramaEngine(_config(tmp_path), transport=_transport(speech)) as engine,
+        pytest.raises(TTSError, match=r"POST .*/v1/audio/speech failed: ReadError"),
+    ):
+        engine.synthesize(["Hello there."])

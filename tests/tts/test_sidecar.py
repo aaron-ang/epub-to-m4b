@@ -474,3 +474,41 @@ def test_busy_retries_derive_from_timeout_and_wait() -> None:
 def test_busy_wait_must_be_positive() -> None:
     with pytest.raises(ValueError, match="busy_wait"):
         sidecar.SidecarPolicy(busy_wait=0.0)
+
+
+def test_sidecar_client_drops_idle_connections_before_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[httpx.Limits] = []
+    real_client = httpx.Client
+
+    def recording_client(*, limits: httpx.Limits, **kwargs: object) -> httpx.Client:
+        seen.append(limits)
+        return real_client(limits=limits, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sidecar.httpx, "Client", recording_client)
+    policy = sidecar.SidecarPolicy(keepalive_expiry=1.5)
+    sidecar.sidecar_client(policy, max_connections=8).close()
+    (limits,) = seen
+    # Servers close idle connections after 5 s; the client must go first.
+    assert limits.keepalive_expiry == 1.5 < 5
+    assert limits.max_connections == limits.max_keepalive_connections == 8
+    assert sidecar.DEFAULT_SIDECAR_POLICY.keepalive_expiry < 5
+
+
+def test_sidecar_client_without_a_cap_keeps_httpx_pool_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[httpx.Limits] = []
+    real_client = httpx.Client
+
+    def recording_client(*, limits: httpx.Limits, **kwargs: object) -> httpx.Client:
+        seen.append(limits)
+        return real_client(limits=limits, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sidecar.httpx, "Client", recording_client)
+    sidecar.sidecar_client(sidecar.DEFAULT_SIDECAR_POLICY).close()
+    (limits,) = seen
+    defaults = httpx.Limits()
+    assert limits.max_connections == defaults.max_connections
+    assert limits.max_keepalive_connections == defaults.max_keepalive_connections

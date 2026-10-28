@@ -695,3 +695,27 @@ def test_max_chars_follows_server_cap_up_to_ceiling(
     transport = _ready_transport([], max_new_tokens=int(server_seconds * _FRAME_RATE))
     with BreezeEngine(_config(tmp_path), transport=transport) as engine:
         assert engine.max_chars == expected
+
+
+def test_batch_is_resent_once_after_a_reset_connection(tmp_path: Path) -> None:
+    batch_calls = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return _health_response()
+        if request.url.path == "/v1/audio/speech":
+            return httpx.Response(200, content=_pcm_bytes(1.0))
+        if request.url.path == "/v1/audio/speech/batch":
+            batch_calls[0] += 1
+            if batch_calls[0] == 1:
+                raise httpx.ReadError("[Errno 104] Connection reset by peer")
+            segment = _pcm_bytes(0.1)
+            return httpx.Response(
+                200, content=segment, headers={"X-Segment-Bytes": str(len(segment))}
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    with BreezeEngine(_config(tmp_path), transport=_mock_transport(handler)) as engine:
+        (clip,) = engine.synthesize(["Hello there."])
+    assert round(clip.seconds, 2) == 0.1
+    assert batch_calls[0] == 2

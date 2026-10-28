@@ -31,12 +31,13 @@ from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest, pcm16_to_float32
 from epub_to_m4b.tts.guard import DEFAULT_RUNAWAY_POLICY, RunawayPolicy
-from epub_to_m4b.tts.http import TTSError, request_once
+from epub_to_m4b.tts.http import TTSError, request_local
 from epub_to_m4b.tts.sidecar import (
     DEFAULT_SIDECAR_POLICY,
     SidecarHandle,
     SidecarPolicy,
     post_until_free,
+    sidecar_client,
     start_or_adopt,
 )
 
@@ -51,6 +52,9 @@ _REFERENCE_TEXT = "This is a clear, steady voice reading aloud for narration."
 # idle; past about 300 characters that stall outweighs keeping the sentence
 # whole.
 _MAX_CHARS = 300
+# Batches resent after a reset connection. The seed fixes every take, so a
+# resend returns the same clips; a dead server fails it too.
+_BATCH_RESENDS = 1
 # Breeze's server uses triton, which needs ptxas on its path. A Breeze/CUDA
 # detail, so it lives here rather than in the engine-agnostic tts/sidecar.py.
 _SIDECAR_ENV = {"TRITON_PTXAS_PATH": "/usr/local/cuda/bin/ptxas"}
@@ -184,10 +188,7 @@ class BreezeEngine(TTSEngine):
             env={k: v for k, v in _SIDECAR_ENV.items() if k not in os.environ},
             transport=self.transport,
         )
-        client_kwargs: dict[str, httpx.BaseTransport] = {}
-        if self.transport is not None:
-            client_kwargs["transport"] = self.transport
-        self._client = httpx.Client(**client_kwargs)  # type: ignore[arg-type]
+        self._client = sidecar_client(self.policy, transport=self.transport)
         try:
             self.sample_rate = self._fetch_sample_rate()
             self.server = self._fetch_server_info()
@@ -207,7 +208,7 @@ class BreezeEngine(TTSEngine):
 
     def _fetch_sample_rate(self) -> int:
         base_url = self._sidecar.base_url
-        response = request_once(
+        response = request_local(
             self._client, HTTPMethod.GET, f"{base_url}/health", timeout=self.policy.request_timeout
         )
         try:
@@ -222,7 +223,7 @@ class BreezeEngine(TTSEngine):
 
     def _fetch_server_info(self) -> ServerInfo:
         base_url = self._sidecar.base_url
-        response = request_once(
+        response = request_local(
             self._client,
             HTTPMethod.GET,
             f"{base_url}/v1/model",
@@ -247,7 +248,9 @@ class BreezeEngine(TTSEngine):
         if ref_wav.exists() and ref_txt.exists():
             return ref_wav, ref_txt.read_text(encoding="utf-8")
 
-        response = self._client.post(
+        response = request_local(
+            self._client,
+            HTTPMethod.POST,
             f"{self._sidecar.base_url}/v1/audio/speech",
             data={
                 "text": _REFERENCE_TEXT,
@@ -313,11 +316,14 @@ class BreezeEngine(TTSEngine):
         def send() -> httpx.Response:
             # Reopen per attempt: httpx consumes the file body on each POST.
             with self._reference_wav.open("rb") as ref_audio_file:
-                return self._client.post(
+                return request_local(
+                    self._client,
+                    HTTPMethod.POST,
                     f"{self._sidecar.base_url}/v1/audio/speech/batch",
                     data=data,
                     files={"ref_audio": ("reference_voice.wav", ref_audio_file, "audio/wav")},
                     timeout=self.policy.batch_timeout,
+                    resends=_BATCH_RESENDS,
                 )
 
         response = post_until_free(

@@ -36,8 +36,13 @@ from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
 from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest
 from epub_to_m4b.tts.guard import DEFAULT_RUNAWAY_POLICY, RunawayPolicy
-from epub_to_m4b.tts.http import TTSError, pcm_response_to_clip, request_once
-from epub_to_m4b.tts.sidecar import SidecarHandle, SidecarPolicy, start_or_adopt
+from epub_to_m4b.tts.http import TTSError, pcm_response_to_clip, request_local
+from epub_to_m4b.tts.sidecar import (
+    SidecarHandle,
+    SidecarPolicy,
+    sidecar_client,
+    start_or_adopt,
+)
 
 # Drama 3's codec decodes 44.1 kHz audio at 2048 samples per frame, so one
 # max_new_tokens step is 2048 / 44100 s of speech.
@@ -49,6 +54,9 @@ _FRAME_RATE = _SAMPLE_RATE / 2048
 # bounds. Prompt plus
 # max_new_tokens must fit the server's max_model_len, or it answers 400.
 _TEMPLATE_ROWS = 256
+# Speech requests resent after a reset connection. The same text and seed
+# give the same clip, so a resend is safe; a dead server fails it too.
+_SPEECH_RESENDS = 1
 # Loading the ~38 GiB of weights, compiling and capturing CUDA graphs takes
 # about ten minutes on a DGX Spark; a request waits behind the server's
 # queue of up to max_concurrency * batch_size others.
@@ -141,11 +149,11 @@ class DramaEngine(TTSEngine):
             transport=self.transport,
         )
         in_flight = self.max_concurrency * self.max_batch
-        limits = httpx.Limits(max_connections=in_flight, max_keepalive_connections=in_flight)
-        if self.transport is None:
-            self._client = httpx.Client(limits=limits)
-        else:
-            self._client = httpx.Client(limits=limits, transport=self.transport)
+        self._client = sidecar_client(
+            self.policy,
+            max_connections=in_flight,
+            transport=self.transport,
+        )
         try:
             max_model_len = self._check_model()
             self._budget_rows = max_model_len - self._ref_rows - _TEMPLATE_ROWS
@@ -180,9 +188,21 @@ class DramaEngine(TTSEngine):
 
         return max_model_len
 
-    def _request(self, method: HTTPMethod, url: str, **kwargs: Any) -> httpx.Response:
-        return request_once(
-            self._client, method, url, timeout=self.policy.request_timeout, **kwargs
+    def _request(
+        self,
+        method: HTTPMethod,
+        url: str,
+        *,
+        resends: int = 0,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        return request_local(
+            self._client,
+            method,
+            url,
+            timeout=self.policy.request_timeout,
+            resends=resends,
+            **kwargs,
         )
 
     def _rows_for(self, text: str) -> int:
@@ -280,7 +300,7 @@ class DramaEngine(TTSEngine):
             "seed": seed,
             "max_new_tokens": tokens,
         }
-        response = self._request(HTTPMethod.POST, url, json=body)
+        response = self._request(HTTPMethod.POST, url, resends=_SPEECH_RESENDS, json=body)
         if not response.is_success:
             raise TTSError(
                 f"POST {url} failed with status {response.status_code}: {response.text[:200]}"

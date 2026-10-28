@@ -9,7 +9,13 @@ import httpx
 import numpy as np
 import pytest
 
-from epub_to_m4b.tts.http import RetryPolicy, TTSError, pcm_response_to_clip, request_with_retry
+from epub_to_m4b.tts.http import (
+    RetryPolicy,
+    TTSError,
+    pcm_response_to_clip,
+    request_local,
+    request_with_retry,
+)
 
 _URL = "https://tts.example/v1/speak"
 
@@ -160,3 +166,49 @@ def test_backoff_doubles_from_policy_base() -> None:
     with httpx.Client(transport=transport) as client, pytest.raises(TTSError):
         request_with_retry(client, HTTPMethod.POST, _URL, policy=policy, sleep=sleeps.append)
     assert sleeps == [0.5, 1.0, 2.0]
+
+
+# ---------------------------------------------------------------------------
+# request_local
+# ---------------------------------------------------------------------------
+
+
+def _local(transport: httpx.MockTransport, resends: int) -> httpx.Response:
+    with httpx.Client(transport=transport) as client:
+        return request_local(client, HTTPMethod.POST, _URL, timeout=1.0, resends=resends)
+
+
+def test_request_local_resends_after_a_reset_connection() -> None:
+    transport, seen = _sequence(httpx.ReadError("reset by peer"), httpx.Response(200))
+    assert _local(transport, resends=1).status_code == 200
+    assert seen == [2]
+
+
+def test_request_local_raises_once_resends_run_out() -> None:
+    transport, seen = _sequence(httpx.ReadError("reset"), httpx.RemoteProtocolError("closed"))
+    with pytest.raises(
+        TTSError, match=r"POST .* failed: RemoteProtocolError: .*after 2 attempts, first ReadError"
+    ):
+        _local(transport, resends=1)
+    assert seen == [2]
+
+
+def test_request_local_never_resends_a_timeout() -> None:
+    transport, seen = _sequence(httpx.ReadTimeout("slow"), httpx.Response(200))
+    with pytest.raises(TTSError, match="ReadTimeout"):
+        _local(transport, resends=3)
+    assert seen == [1]
+
+
+def test_request_local_sends_once_by_default() -> None:
+    transport, seen = _sequence(httpx.ConnectError("refused"), httpx.Response(200))
+    with pytest.raises(TTSError, match="ConnectError"):
+        _local(transport, resends=0)
+    assert seen == [1]
+
+
+def test_request_local_rejects_negative_resends() -> None:
+    transport, seen = _sequence(httpx.Response(200))
+    with pytest.raises(ValueError, match="resends"):
+        _local(transport, resends=-1)
+    assert seen == [0]

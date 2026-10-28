@@ -57,6 +57,11 @@ class SidecarPolicy:
     busy_status: int = httpx.codes.CONFLICT  # server answers this while another inference runs
     busy_timeout: float = 300.0  # total wait for a busy server before giving up
     busy_wait: float = 5.0  # between busy retries
+    # Idle pooled connections are dropped after this. Servers close their side
+    # after 5 s idle (uvicorn's default, vLLM's VLLM_HTTP_TIMEOUT_KEEP_ALIVE);
+    # a request sent on a connection the server is closing that instant is
+    # reset, so the client gives up its connections first.
+    keepalive_expiry: float = 2.0
 
     def __post_init__(self) -> None:
         if self.busy_wait <= 0:
@@ -69,6 +74,31 @@ class SidecarPolicy:
 
 
 DEFAULT_SIDECAR_POLICY = SidecarPolicy()
+
+
+def sidecar_client(
+    policy: SidecarPolicy,
+    *,
+    max_connections: int | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> httpx.Client:
+    """An ``httpx.Client`` for a sidecar server that drops idle connections
+    before the server does. ``max_connections`` caps requests in flight
+    (httpx's defaults when None). ``transport`` replaces the network for
+    tests; httpx applies no pool limits to a transport passed in.
+    """
+    caps = (
+        {}
+        if max_connections is None
+        else {
+            "max_connections": max_connections,
+            "max_keepalive_connections": max_connections,
+        }
+    )
+    limits = httpx.Limits(keepalive_expiry=policy.keepalive_expiry, **caps)
+    if transport is None:
+        return httpx.Client(limits=limits)
+    return httpx.Client(limits=limits, transport=transport)
 
 
 def _poll_health(
@@ -155,11 +185,7 @@ def start_or_adopt(
     as the default).
     """
     base_url = f"http://127.0.0.1:{port}"
-    client_kwargs: dict[str, httpx.BaseTransport] = {}
-    if transport is not None:
-        client_kwargs["transport"] = transport
-
-    with httpx.Client(**client_kwargs) as client:  # type: ignore[arg-type]
+    with sidecar_client(policy, transport=transport) as client:
         initial = _poll_health(client, base_url, policy)
         if initial is not None and initial.status_code == httpx.codes.OK:
             return SidecarHandle(

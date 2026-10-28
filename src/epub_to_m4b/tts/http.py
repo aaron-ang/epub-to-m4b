@@ -140,18 +140,43 @@ def request_with_retry(
     ) from last_error
 
 
-def request_once(
-    client: httpx.Client, method: HTTPMethod, url: str, *, timeout: float, **kwargs: Any
+def request_local(
+    client: httpx.Client,
+    method: HTTPMethod,
+    url: str,
+    *,
+    timeout: float,
+    resends: int = 0,
+    **kwargs: Any,
 ) -> httpx.Response:
-    """Send one request with no retry; a transport failure raises ``TTSError``.
+    """Send a request to a local server; a transport failure raises ``TTSError``.
 
-    For local servers, where a dropped connection means the server died
-    rather than a blip worth retrying. Any status is returned to the caller.
+    No backoff: a local server is up or it is not. ``resends`` sends the
+    request again after a reset or dropped connection, the keep-alive race a
+    pooled connection can lose; a dead server fails the resend too. A timeout
+    is never resent. Only for requests that are safe to repeat. Any status is
+    returned to the caller.
     """
-    try:
-        return client.request(method, url, timeout=timeout, **kwargs)
-    except httpx.TransportError as exc:
-        raise TTSError(f"{method} {url} failed: {type(exc).__name__}: {exc}") from exc
+    if resends < 0:
+        raise ValueError(f"resends must be at least 0, got {resends}")
+
+    first: Exception | None = None
+    for attempt in range(resends + 1):
+        try:
+            return client.request(method, url, timeout=timeout, **kwargs)
+        except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+            first = first or exc
+            if attempt < resends:
+                continue
+
+            detail = f"{type(exc).__name__}: {exc}"
+            if exc is not first:
+                detail += f" (after {attempt + 1} attempts, first {type(first).__name__}: {first})"
+            raise TTSError(f"{method} {url} failed: {detail}") from exc
+        except httpx.TransportError as exc:
+            raise TTSError(f"{method} {url} failed: {type(exc).__name__}: {exc}") from exc
+
+    raise AssertionError("unreachable: the loop returns or raises")
 
 
 def pcm_response_to_clip(response: httpx.Response, sample_rate: int) -> AudioClip:

@@ -89,7 +89,7 @@ class AudioClip: samples: npt.NDArray[np.float32]; sample_rate: int  # mono, sha
 
 Sidecar engines call `start_or_adopt(command, port, log_path=..., policy=SidecarPolicy(...), env=...)`; a 200 from `GET /health` means ready, and the body belongs to the engine. Single-slot servers (Breeze) answer 409 while busy, so their POSTs go through `post_until_free(send, policy=..., on_busy=...)`; queueing servers (vLLM-Omni) skip it.
 
-API engines (`openai_compat`, `elevenlabs`, `deepgram`) share `tts/http.py`: retry with backoff on transport errors and 408/429/5xx, honour `Retry-After`, raise `TTSError` after exhausting retries. Sidecar engines send setup requests through `request_once` there: no retry, a transport failure raises `TTSError`.
+API engines (`openai_compat`, `elevenlabs`, `deepgram`) share `tts/http.py`: `request_with_retry` retries with backoff on transport errors and 408/429/5xx, honours `Retry-After`, and raises `TTSError` after exhausting retries. Sidecar engines send setup requests through `request_once` there: no retry, a transport failure raises `TTSError`.
 
 Sidecar engines write `<name>-server-<port>.log` under `cache_dir`.
 

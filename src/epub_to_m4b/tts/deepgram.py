@@ -10,13 +10,14 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from http import HTTPMethod
 from typing import ClassVar
 
 import httpx
 
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest
-from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, post_with_retry
+from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, request_with_retry
 
 # Rate requested via the ``sample_rate=24000`` query parameter.
 _SAMPLE_RATE = 24000
@@ -60,8 +61,9 @@ class DeepgramEngine(TTSEngine):
         }
         clips = []
         for text in texts:
-            response = post_with_retry(
+            response = request_with_retry(
                 self._client,
+                HTTPMethod.POST,
                 url,
                 sleep=self.sleep,
                 headers=headers,

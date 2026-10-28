@@ -4,7 +4,7 @@ a single request for local servers, and PCM decoding.
 Every hosted TTS API fails the same few ways - a dropped connection, a
 timeout, a 429 when the account's rate limit trips, a 5xx while the
 provider is degraded - and recovers the same way: wait, then send the same
-request again. ``post_with_retry`` owns that loop so each engine module is
+request again. ``request_with_retry`` owns that loop so each engine module is
 only the request shape and the response decoding. Rate limiting is left
 entirely to the server: a 429 with ``Retry-After`` tells us exactly how
 long to wait, so there is no client-side token bucket to keep in step with
@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from http import HTTPMethod
 from typing import Any
 
 import httpx
@@ -94,15 +95,16 @@ def _excerpt(response: httpx.Response) -> str:
     return response.text[:_BODY_EXCERPT_CHARS]
 
 
-def post_with_retry(
+def request_with_retry(
     client: httpx.Client,
+    method: HTTPMethod,
     url: str,
     *,
     policy: RetryPolicy = DEFAULT_RETRY_POLICY,
     sleep: Callable[[float], None] = time.sleep,
     **request_kwargs: Any,
 ) -> httpx.Response:
-    """POST ``url`` until it returns 2xx, retrying transport errors and
+    """Send ``method`` to ``url`` until it returns 2xx, retrying transport errors and
     408/429/5xx with ``Retry-After`` or the policy's backoff schedule in
     between. Any other non-2xx status is final and raises at once."""
     last_error: Exception | None = None
@@ -110,7 +112,7 @@ def post_with_retry(
     for attempt in range(policy.max_retries + 1):
         last_response = None
         try:
-            response = client.post(url, **request_kwargs)
+            response = client.request(method, url, **request_kwargs)
         except httpx.TransportError as exc:
             last_error = exc
         else:
@@ -118,7 +120,8 @@ def post_with_retry(
                 return response
             if not _is_retryable(response.status_code):
                 raise TTSError(
-                    f"POST {url} failed with status {response.status_code}: {_excerpt(response)}"
+                    f"{method} {url} failed with status {response.status_code}: "
+                    f"{_excerpt(response)}"
                 )
             last_response = response
             last_error = httpx.HTTPStatusError(
@@ -133,12 +136,12 @@ def post_with_retry(
     else:
         detail = f"{type(last_error).__name__}: {last_error}"
     raise TTSError(
-        f"POST {url} failed after {policy.max_retries + 1} attempts, last {detail}"
+        f"{method} {url} failed after {policy.max_retries + 1} attempts, last {detail}"
     ) from last_error
 
 
 def request_once(
-    client: httpx.Client, method: str, url: str, *, timeout: float, **kwargs: Any
+    client: httpx.Client, method: HTTPMethod, url: str, *, timeout: float, **kwargs: Any
 ) -> httpx.Response:
     """Send one request with no retry; a transport failure raises ``TTSError``.
 

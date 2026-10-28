@@ -25,6 +25,7 @@ import mimetypes
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from http import HTTPMethod
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -158,7 +159,7 @@ class DramaEngine(TTSEngine):
     def _check_model(self) -> int:
         """The served model's max_model_len; raises unless ``config.model`` is served."""
         base_url = self._sidecar.base_url
-        response = self._request("GET", f"{base_url}/v1/models")
+        response = self._request(HTTPMethod.GET, f"{base_url}/v1/models")
         try:
             body = response.json()
         except ValueError:
@@ -179,7 +180,7 @@ class DramaEngine(TTSEngine):
 
         return max_model_len
 
-    def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+    def _request(self, method: HTTPMethod, url: str, **kwargs: Any) -> httpx.Response:
         return request_once(
             self._client, method, url, timeout=self.policy.request_timeout, **kwargs
         )
@@ -216,7 +217,7 @@ class DramaEngine(TTSEngine):
 
     def _ensure_voice(self) -> None:
         url = f"{self._sidecar.base_url}/v1/audio/voices"
-        listed = self._request("GET", url)
+        listed = self._request(HTTPMethod.GET, url)
         try:
             body = listed.json()
         except ValueError:
@@ -231,7 +232,7 @@ class DramaEngine(TTSEngine):
         filename = self.config.reference_audio.name
         mime = mimetypes.guess_type(filename)[0] or "audio/wav"
         response = self._request(
-            "POST",
+            HTTPMethod.POST,
             url,
             data={
                 "name": self._voice,
@@ -279,7 +280,7 @@ class DramaEngine(TTSEngine):
             "seed": seed,
             "max_new_tokens": tokens,
         }
-        response = self._request("POST", url, json=body)
+        response = self._request(HTTPMethod.POST, url, json=body)
         if not response.is_success:
             raise TTSError(
                 f"POST {url} failed with status {response.status_code}: {response.text[:200]}"

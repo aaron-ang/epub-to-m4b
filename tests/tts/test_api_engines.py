@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from http import HTTPMethod
 
 import httpx
 import numpy as np
@@ -29,7 +30,7 @@ class _Case:
 
     make: Callable[..., TTSEngine]
     url: str
-    method: str
+    method: HTTPMethod
     headers: dict[str, str]
     body: Callable[[str], dict[str, object]]
     audio_override: dict[str, object]
@@ -84,7 +85,7 @@ CASES = {
             "https://api.deepgram.com/v1/speak"
             "?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&container=none"
         ),
-        method="POST",
+        method=HTTPMethod.POST,
         headers={"Authorization": f"Token {_KEY}"},
         body=lambda text: {"text": text},
         audio_override={"model": "aura-2-orion-en"},
@@ -93,7 +94,7 @@ CASES = {
     "elevenlabs": _Case(
         make=_elevenlabs,
         url="https://api.elevenlabs.io/v1/text-to-speech/voice123?output_format=pcm_24000",
-        method="POST",
+        method=HTTPMethod.POST,
         headers={"xi-api-key": _KEY},
         body=lambda text: {"text": text, "model_id": "eleven_multilingual_v2"},
         audio_override={"model_id": "eleven_turbo_v2_5"},
@@ -102,7 +103,7 @@ CASES = {
     "openai": _Case(
         make=_openai,
         url="https://api.openai.com/v1/audio/speech",
-        method="POST",
+        method=HTTPMethod.POST,
         headers={"Authorization": f"Bearer {_KEY}"},
         body=lambda text: {
             "model": "gpt-4o-mini-tts",

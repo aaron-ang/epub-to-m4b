@@ -3,12 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
+from http import HTTPMethod
 
 import httpx
 import numpy as np
 import pytest
 
-from epub_to_m4b.tts.http import RetryPolicy, TTSError, pcm_response_to_clip, post_with_retry
+from epub_to_m4b.tts.http import RetryPolicy, TTSError, pcm_response_to_clip, request_with_retry
 
 _URL = "https://tts.example/v1/speak"
 
@@ -33,7 +34,9 @@ def test_success_on_first_try_does_not_sleep() -> None:
     transport, seen = _sequence(httpx.Response(200, content=b"ok"))
     sleeps: list[float] = []
     with httpx.Client(transport=transport) as client:
-        response = post_with_retry(client, _URL, sleep=sleeps.append, json={"text": "hi"})
+        response = request_with_retry(
+            client, HTTPMethod.POST, _URL, sleep=sleeps.append, json={"text": "hi"}
+        )
     assert response.status_code == 200
     assert response.content == b"ok"
     assert seen[0] == 1
@@ -46,7 +49,7 @@ def test_429_with_retry_after_seconds_waits_exactly_that_long() -> None:
     )
     sleeps: list[float] = []
     with httpx.Client(transport=transport) as client:
-        response = post_with_retry(client, _URL, sleep=sleeps.append)
+        response = request_with_retry(client, HTTPMethod.POST, _URL, sleep=sleeps.append)
     assert response.status_code == 200
     assert seen[0] == 2
     assert sleeps == [3.0]
@@ -60,7 +63,7 @@ def test_retry_after_http_date_is_parsed_relative_to_now() -> None:
     )
     sleeps: list[float] = []
     with httpx.Client(transport=transport) as client:
-        post_with_retry(client, _URL, sleep=sleeps.append)
+        request_with_retry(client, HTTPMethod.POST, _URL, sleep=sleeps.append)
     assert len(sleeps) == 1
     # HTTP-dates carry whole seconds, so the wait lands anywhere in a
     # roughly two-second window around the nominal value.
@@ -73,8 +76,12 @@ def test_retry_after_is_capped_by_policy() -> None:
     )
     sleeps: list[float] = []
     with httpx.Client(transport=transport) as client:
-        post_with_retry(
-            client, _URL, policy=RetryPolicy(max_retry_after_seconds=7.5), sleep=sleeps.append
+        request_with_retry(
+            client,
+            HTTPMethod.POST,
+            _URL,
+            policy=RetryPolicy(max_retry_after_seconds=7.5),
+            sleep=sleeps.append,
         )
     assert sleeps == [7.5]
 
@@ -86,7 +93,7 @@ def test_persistent_5xx_exhausts_retries_with_backoff_schedule() -> None:
         httpx.Client(transport=transport) as client,
         pytest.raises(TTSError, match="503") as exc_info,
     ):
-        post_with_retry(client, _URL, sleep=sleeps.append)
+        request_with_retry(client, HTTPMethod.POST, _URL, sleep=sleeps.append)
     assert seen[0] == 6
     assert sleeps == [1, 2, 4, 8, 16]
     assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
@@ -96,7 +103,7 @@ def test_connect_error_is_retried_then_succeeds() -> None:
     transport, seen = _sequence(httpx.ConnectError("refused"), httpx.Response(200, content=b"ok"))
     sleeps: list[float] = []
     with httpx.Client(transport=transport) as client:
-        response = post_with_retry(client, _URL, sleep=sleeps.append)
+        response = request_with_retry(client, HTTPMethod.POST, _URL, sleep=sleeps.append)
     assert response.status_code == 200
     assert seen[0] == 2
     assert sleeps == [1]
@@ -109,7 +116,9 @@ def test_persistent_transport_error_chains_the_last_exception() -> None:
         httpx.Client(transport=transport) as client,
         pytest.raises(TTSError, match="ReadTimeout") as exc_info,
     ):
-        post_with_retry(client, _URL, policy=RetryPolicy(max_retries=2), sleep=sleeps.append)
+        request_with_retry(
+            client, HTTPMethod.POST, _URL, policy=RetryPolicy(max_retries=2), sleep=sleeps.append
+        )
     assert seen[0] == 3
     assert sleeps == [1, 2]
     assert isinstance(exc_info.value.__cause__, httpx.ReadTimeout)
@@ -124,7 +133,7 @@ def test_non_retryable_status_fails_immediately_with_body_excerpt(status: int) -
         httpx.Client(transport=transport) as client,
         pytest.raises(TTSError, match=str(status)) as exc_info,
     ):
-        post_with_retry(client, _URL, sleep=sleeps.append)
+        request_with_retry(client, HTTPMethod.POST, _URL, sleep=sleeps.append)
     assert seen[0] == 1
     assert sleeps == []
     assert "x" * 200 in str(exc_info.value)
@@ -149,5 +158,5 @@ def test_backoff_doubles_from_policy_base() -> None:
     sleeps: list[float] = []
     policy = RetryPolicy(max_retries=3, backoff_base_seconds=0.5)
     with httpx.Client(transport=transport) as client, pytest.raises(TTSError):
-        post_with_retry(client, _URL, policy=policy, sleep=sleeps.append)
+        request_with_retry(client, HTTPMethod.POST, _URL, policy=policy, sleep=sleeps.append)
     assert sleeps == [0.5, 1.0, 2.0]

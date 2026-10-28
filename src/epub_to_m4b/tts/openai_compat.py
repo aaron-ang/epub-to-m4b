@@ -11,13 +11,14 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from http import HTTPMethod
 from typing import ClassVar
 
 import httpx
 
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest
-from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, post_with_retry
+from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, request_with_retry
 
 # Rate of the raw PCM the API returns for ``response_format=pcm``.
 _SAMPLE_RATE = 24000
@@ -64,8 +65,8 @@ class OpenAIEngine(TTSEngine):
                 "speed": self.config.speed,
                 "response_format": "pcm",
             }
-            response = post_with_retry(
-                self._client, url, sleep=self.sleep, headers=headers, json=body
+            response = request_with_retry(
+                self._client, HTTPMethod.POST, url, sleep=self.sleep, headers=headers, json=body
             )
             clips.append(pcm_response_to_clip(response, self.sample_rate))
         return clips

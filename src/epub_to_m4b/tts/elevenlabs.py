@@ -10,18 +10,21 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from http import HTTPMethod
 from typing import ClassVar
 
 import httpx
 
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts.base import TTSEngine, fingerprint_digest
-from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, post_with_retry
+from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, request_with_retry
 
 # Rate encoded in the ``output_format=pcm_24000`` query parameter.
 _SAMPLE_RATE = 24000
-# Longest sentence sent uncut: under ElevenLabs' 5000-character request
-# limit, and longer than almost any sentence in a book.
+# Longest sentence sent uncut: under every ElevenLabs model's request limit
+# (maximum_text_length_per_request in GET /v1/models, 10000+), and longer
+# than almost any sentence in a book. Fixed rather than fetched, so a cached
+# run needs no network and split points never move with the API.
 _MAX_CHARS = 1000
 
 
@@ -56,8 +59,9 @@ class ElevenLabsEngine(TTSEngine):
         params = {"output_format": f"pcm_{self.sample_rate}"}
         clips = []
         for text in texts:
-            response = post_with_retry(
+            response = request_with_retry(
                 self._client,
+                HTTPMethod.POST,
                 url,
                 sleep=self.sleep,
                 headers=headers,

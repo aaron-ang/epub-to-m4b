@@ -20,6 +20,7 @@ import os
 import wave
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from http import HTTPMethod
 from pathlib import Path
 from typing import ClassVar
 
@@ -207,7 +208,7 @@ class BreezeEngine(TTSEngine):
     def _fetch_sample_rate(self) -> int:
         base_url = self._sidecar.base_url
         response = request_once(
-            self._client, "GET", f"{base_url}/health", timeout=self.policy.request_timeout
+            self._client, HTTPMethod.GET, f"{base_url}/health", timeout=self.policy.request_timeout
         )
         try:
             body = response.json()
@@ -222,7 +223,10 @@ class BreezeEngine(TTSEngine):
     def _fetch_server_info(self) -> ServerInfo:
         base_url = self._sidecar.base_url
         response = request_once(
-            self._client, "GET", f"{base_url}/v1/model", timeout=self.policy.request_timeout
+            self._client,
+            HTTPMethod.GET,
+            f"{base_url}/v1/model",
+            timeout=self.policy.request_timeout,
         )
         if response.status_code != httpx.codes.OK:
             raise _wrong_server(base_url, f"GET /v1/model answered {response.status_code}")

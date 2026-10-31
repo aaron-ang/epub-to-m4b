@@ -80,9 +80,11 @@ def resolve_config_path(cli_path: Path | None) -> Path:
     """CLI flag > ``E2M_CONFIG`` env var > default path, in that order."""
     if cli_path is not None:
         return cli_path.expanduser()
+
     env_value = os.environ.get(_CONFIG_ENV_VAR)
     if env_value:
         return Path(env_value).expanduser()
+
     return DEFAULT_CONFIG_PATH
 
 
@@ -105,7 +107,9 @@ def _load_toml(path: Path, *, explicit: bool) -> dict[str, object]:
     if not path.exists():
         if explicit:
             raise ConfigError(f"config file not found: {path}")
+
         return {}
+
     try:
         with path.open("rb") as toml_file:
             return tomllib.load(toml_file)
@@ -167,10 +171,12 @@ def _check_type(section: str, key: str, value: object, annotation: object) -> ob
             f"{section}.{key}: unsupported config field annotation {annotation!r}; "
             "extend _check_type"
         )
+
     if not ok:
         raise ConfigError(
             f"[engine.{section}].{key}: expected {expected}, got {type(value).__name__}"
         )
+
     return value
 
 
@@ -196,11 +202,13 @@ def _build_engine_config[C: DataclassInstance](
     unknown = sorted(set(table) - accepted)
     if unknown:
         raise ConfigError(f"[engine.{section}]: unknown key(s): {', '.join(unknown)}")
+
     missing = [key for key in required if key not in table]
     if missing:
         raise ConfigError(
             f"[engine.{section}] is missing required key(s): {', '.join(missing)}{missing_hint}"
         )
+
     hints = get_type_hints(config_cls)
     kwargs: dict[str, object] = dict(extra)
     for key, raw_value in table.items():

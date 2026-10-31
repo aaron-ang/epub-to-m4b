@@ -80,6 +80,7 @@ def assemble_chapter(
     for sentence, clip in pairs:
         if clip.sample_rate != sample_rate:
             raise ValueError(f"clip sample_rate {clip.sample_rate} != chapter rate {sample_rate}")
+
         start = cursor
         samples = trim_edges(clip.samples, sample_rate)
         chunks.append(samples)

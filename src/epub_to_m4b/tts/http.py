@@ -71,13 +71,16 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
     header = response.headers.get("Retry-After")
     if header is None:
         return None
+
     header = header.strip()
     if header.isdigit():
         return float(header)
+
     try:
         when = parsedate_to_datetime(header)
     except TypeError, ValueError:
         return None
+
     if when.tzinfo is None:
         when = when.replace(tzinfo=UTC)
     return max(0.0, (when - datetime.now(UTC)).total_seconds())
@@ -118,11 +121,13 @@ def request_with_retry(
         else:
             if response.is_success:
                 return response
+
             if not _is_retryable(response.status_code):
                 raise TTSError(
                     f"{method} {url} failed with status {response.status_code}: "
                     f"{_excerpt(response)}"
                 )
+
             last_response = response
             last_error = httpx.HTTPStatusError(
                 f"status {response.status_code}", request=response.request, response=response

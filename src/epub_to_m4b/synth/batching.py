@@ -39,5 +39,6 @@ def make_batches(items: Sequence[PendingClip], max_batch: int) -> list[list[Pend
     length-similarity."""
     if max_batch < 1:
         raise ValueError(f"max_batch must be >= 1, got {max_batch}")
+
     ordered = sorted(items, key=lambda item: len(item.text), reverse=True)
     return [list(ordered[i : i + max_batch]) for i in range(0, len(ordered), max_batch)]

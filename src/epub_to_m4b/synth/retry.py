@@ -62,9 +62,11 @@ class RetryQueue:
         """Settle a first-pass clip now, or queue it for a reseed (``None``)."""
         if self._engine.retries < 1:
             return Settled(item, clip)
+
         miss = self._engine.clip_miss(item.text, clip, capped=True)
         if miss == 0.0:
             return Settled(item, clip)
+
         self._capped.append(_Entry(item, clip, miss))
         return None
 
@@ -89,6 +91,7 @@ class RetryQueue:
         clips = self._engine.resynthesize(texts, self._round, capped=capped)
         if len(clips) != len(group):
             raise ValueError(f"engine returned {len(clips)} retry clips for {len(group)} texts")
+
         settled: list[Settled] = []
         for entry, clip in zip(group, clips, strict=True):
             entry.attempts += 1
@@ -109,6 +112,7 @@ def _note(entry: _Entry) -> str:
     preview = f"{entry.item.text[:60]!r}"
     if entry.miss == 0.0:
         return f"clip recovered after {entry.attempts} retries: {preview}"
+
     return (
         f"clip kept at {entry.best.seconds:.1f}s, {entry.miss:.1f}s outside its "
         f"expected length after {entry.attempts} retries: {preview}"

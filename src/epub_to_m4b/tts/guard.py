@@ -70,6 +70,7 @@ def short_limit_seconds(text: str, policy: RunawayPolicy) -> float:
     """
     if len(text) < policy.min_chars:
         return 0.0
+
     return policy.min_seconds_per_char * len(text)
 
 
@@ -103,4 +104,5 @@ def clip_miss_seconds(clip: AudioClip, text: str, policy: RunawayPolicy, *, capp
     """
     if capped and clip.seconds > retry_limit_seconds(text, policy):
         return math.inf
+
     return window_miss_seconds(clip, text, policy)

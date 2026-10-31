@@ -31,6 +31,7 @@ def _breeze_factory(config: AppConfig) -> TTSEngine:
             "pass --config pointing at a TOML file with a fully configured "
             "[engine.breeze] table (command, ...) to use it"
         )
+
     return BreezeEngine(config.breeze)
 
 

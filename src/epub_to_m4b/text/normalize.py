@@ -56,6 +56,7 @@ def nemo_normalizer(lang: str) -> _Normalizer:
         )
     except NotImplementedError:
         raise ValueError(f"unsupported language: {lang!r}") from None
+
     return normalizer
 
 
@@ -71,9 +72,11 @@ def normalize_all(texts: Sequence[str], lang: str = "en") -> list[str]:
     worker loads the compiled grammars once; the workers exit on return."""
     if not texts:
         return []
+
     jobs = min(len(texts), os.process_cpu_count() or 1)
     if jobs == 1:
         return _normalize_chunk(lang, list(texts))
+
     # Compiles the grammars into the cache before the workers load them.
     nemo_normalizer(lang)
     size = math.ceil(len(texts) / jobs)

@@ -101,9 +101,11 @@ def _readable_and_nonempty(path: Path) -> bool:
     try:
         if path.stat().st_size == 0:
             return False
+
         sf.info(path)
     except OSError, sf.SoundFileError:
         return False
+
     return True
 
 
@@ -114,9 +116,11 @@ def has_clip(cache_dir: Path, engine_fingerprint: str, key: str) -> bool:
     path = clip_path(cache_dir, engine_fingerprint, key)
     if not path.is_file():
         return False
+
     if not _readable_and_nonempty(path):
         path.unlink(missing_ok=True)
         return False
+
     return True
 
 
@@ -126,11 +130,13 @@ def load_clip(cache_dir: Path, engine_fingerprint: str, key: str) -> AudioClip |
     path = clip_path(cache_dir, engine_fingerprint, key)
     if not path.is_file():
         return None
+
     try:
         samples, sample_rate = sf.read(path, dtype="float32", always_2d=False)
     except OSError, sf.SoundFileError:
         path.unlink(missing_ok=True)
         return None
+
     samples = np.asarray(samples, dtype=np.float32)
     if samples.ndim > 1:  # defensive: clips are always written mono
         samples = samples[:, 0]
@@ -224,6 +230,7 @@ def load_chapter_manifest(
     path = chapter_manifest_path(out_dir, book_sha256, chapter_index)
     if not path.is_file():
         return None
+
     try:
         return ChapterManifest.from_json(path.read_text(encoding="utf-8"))
     except OSError, ValueError, KeyError, TypeError:
@@ -251,9 +258,11 @@ def current_chapter_manifest(
         gap_after=gap_after,
     ):
         return None
+
     flac_path = chapter_flac_path(out_dir, book_sha256, chapter_index)
     if not flac_path.is_file() or not _readable_and_nonempty(flac_path):
         return None
+
     return manifest
 
 

@@ -143,6 +143,7 @@ def _configure_logging() -> None:
     package_logger = logging.getLogger("epub_to_m4b")
     if package_logger.handlers:
         return
+
     # Binds the stream object that is current at call time, not the module
     # attribute, so a later reassignment of sys.stderr is not followed.
     handler = logging.StreamHandler(sys.stderr)
@@ -157,6 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not hasattr(args, "func"):
         parser.print_help()
         return 1
+
     _configure_logging()
     result: int = args.func(args)
     return result
@@ -193,6 +195,7 @@ def _cmd_chapters(book: Book, _args: argparse.Namespace) -> int:
     longest = max((len(ch.title) for ch in book.chapters), default=0)
     width = max(len("title"), min(_TITLE_COLUMN_WIDTH, longest))
     print(f"{'#':>3}  {'title':<{width}}  {'paras':>5}  {'chars':>7}  {'docs':>4}")
+
     for n, ch in enumerate(book.chapters, start=1):
         chars = sum(len(p.text) for p in ch.paragraphs)
         title = ch.title if len(ch.title) <= width else ch.title[: width - 1] + "…"
@@ -200,6 +203,7 @@ def _cmd_chapters(book: Book, _args: argparse.Namespace) -> int:
             f"{n:>3}  {title:<{width}}  {len(ch.paragraphs):>5}"
             f"  {chars:>7}  {len(ch.source_ids):>4}"
         )
+
     return 0
 
 
@@ -209,6 +213,7 @@ def _cmd_dump_text(book: Book, args: argparse.Namespace) -> int:
         if not 1 <= args.chapter <= len(chapters):
             print(f"error: chapter {args.chapter} out of range 1..{len(chapters)}", file=sys.stderr)
             return 1
+
         chapters = [chapters[args.chapter - 1]]
 
     paragraph_texts = [p.text for _, ch in chapters for p in ch.paragraphs]
@@ -356,13 +361,16 @@ def _m4b_is_current(
     and would then never be rebuilt."""
     if not m4b_path.is_file():
         return False
+
     m4b_mtime = m4b_path.stat().st_mtime
     if any(f.stat().st_mtime > m4b_mtime for f in chapter_files):
         return False
+
     try:
         probe = probe_chapters(m4b_path)
     except EpubToM4bError, ValueError:
         return False
+
     return len(probe.get("chapters", [])) == expected_chapters
 
 

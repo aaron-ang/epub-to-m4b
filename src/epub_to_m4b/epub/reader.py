@@ -89,6 +89,7 @@ def _cover(ebook: Any) -> tuple[bytes | None, str | None]:
                 break
     if item is None:
         return None, None
+
     return bytes(item.get_content()), str(item.media_type) if item.media_type else None
 
 

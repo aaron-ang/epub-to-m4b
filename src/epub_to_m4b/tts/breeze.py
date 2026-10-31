@@ -114,6 +114,7 @@ class ServerInfo:
             }
             bad = ", ".join(f"{k}={body.get(k)!r}" for k, v in parsed.items() if v is None)
             raise _wrong_server(base_url, f"missing or invalid /v1/model field(s): {bad}")
+
         return cls(frame_rate, model_digest, max_new_tokens, max_batch_texts)
 
 
@@ -303,6 +304,7 @@ class BreezeEngine(TTSEngine):
         tokens = guard.max_new_tokens(chunk, self.runaway, self.server.frame_rate)
         if tokens <= self.server.max_new_tokens:
             return tokens
+
         if not self._cap_clamp_logged:
             logger.debug(
                 "Breeze token cap %d clamped to the server's max_new_tokens %d",
@@ -340,11 +342,13 @@ class BreezeEngine(TTSEngine):
         header = response.headers.get("X-Segment-Bytes", "")
         if not header:
             raise TTSError("Breeze batch response is missing the X-Segment-Bytes header")
+
         sizes = [int(value) for value in header.split(",")]
         if len(sizes) != expected_count:
             raise TTSError(
                 f"Breeze batch response returned {len(sizes)} segments for {expected_count} texts"
             )
+
         sample_rate = int(response.headers.get("X-Sample-Rate", self.sample_rate))
         body = response.content
         if sum(sizes) != len(body):
@@ -352,6 +356,7 @@ class BreezeEngine(TTSEngine):
                 f"Breeze batch response segment sizes sum to {sum(sizes)} "
                 f"but body is {len(body)} bytes"
             )
+
         clips = []
         offset = 0
         for size in sizes:

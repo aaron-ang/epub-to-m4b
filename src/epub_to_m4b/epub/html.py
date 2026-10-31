@@ -98,10 +98,13 @@ def _should_drop(tag: Tag) -> bool:
     name = tag.name.lower()
     if name in DROP_TAGS:
         return True
+
     if _NOTE_TYPES.intersection(_semantic_types(tag)):
         return True
+
     if name in {"sup", "a"} and "noteref" in _attr(tag, "class").lower():
         return True
+
     return name == "figure" and not any(
         fc.get_text(strip=True) for fc in tag.find_all("figcaption")
     )

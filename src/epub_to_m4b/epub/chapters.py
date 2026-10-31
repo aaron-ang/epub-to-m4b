@@ -213,10 +213,12 @@ def remove_running_headers(docs: Sequence[SpineDoc], title: str | None) -> list[
     """Drop the book title heading repeated at the top of many docs, keeping the first."""
     if not title:
         return list(docs)
+
     key = _heading_key(title)
     hits = [i for i, d in enumerate(docs) if _first_heading_key(d) == key]
     if len(hits) < RUNNING_HEADER_MIN_DOCS:
         return list(docs)
+
     drop = set(hits[1:])
     out: list[SpineDoc] = []
     for i, d in enumerate(docs):
@@ -342,11 +344,13 @@ def _absorb(
     paragraphs = head.paragraphs + tail.paragraphs
     if keep_first_title or tail.source is _TitleSource.NONE:
         return _Draft(head.title, head.source, docs, paragraphs)
+
     labelled = head.source in (_TitleSource.TOC, _TitleSource.HEADING) and head.title
     if labelled and _heading_key(head.title) != _heading_key(book_title):
         combined = f"{head.title} — {tail.title}"
         if len(combined.encode()) <= MAX_TITLE_BYTES:
             return _Draft(combined, tail.source, docs, paragraphs)
+
     return _Draft(tail.title, tail.source, docs, paragraphs)
 
 
@@ -367,9 +371,11 @@ def _title_from_paragraphs(paragraphs: Sequence[Paragraph]) -> str:
     heading = next((p for p in paragraphs if p.kind is ParagraphKind.HEADING), None)
     if heading:
         return heading.text
+
     body = next((p for p in paragraphs if p.kind is not ParagraphKind.HEADING), None)
     if body is None:
         return ""
+
     sentence = _SENTENCE_END_RE.split(body.text, maxsplit=1)[0]
     return _truncate(sentence, MAX_TITLE_BYTES)
 

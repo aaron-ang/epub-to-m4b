@@ -78,8 +78,10 @@ def sentence_gap(
     """
     if kind is ParagraphKind.HEADING or is_last_in_chapter:
         return policy.heading
+
     if is_last_in_paragraph:
         return policy.paragraph
+
     return policy.clause if _terminal_char(text) in _CLAUSE_CHARS else policy.sentence_end
 
 
@@ -348,6 +350,7 @@ def _assemble_chapter(
                 f"clip {key} for chapter {idx} vanished from {cache_dir} between synthesis "
                 "and assembly - rerun to synthesize it again"
             )
+
         pairs.append((sentence, clip))
 
     def write_audio(tmp_path: Path) -> tuple[cache.Offsets, float]:

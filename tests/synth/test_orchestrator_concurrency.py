@@ -68,6 +68,7 @@ class _OverlapEngine(TTSEngine):
             time.sleep(self.pause_after_failure if past_failure else self.pause)
             if call == self.fail_on_call:
                 raise RuntimeError("batch exploded")
+
             return [
                 AudioClip(samples=np.zeros(len(text), dtype=np.float32), sample_rate=8000)
                 for text in texts

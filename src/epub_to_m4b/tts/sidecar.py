@@ -98,6 +98,7 @@ def sidecar_client(
     limits = httpx.Limits(keepalive_expiry=policy.keepalive_expiry, **caps)
     if transport is None:
         return httpx.Client(limits=limits)
+
     return httpx.Client(limits=limits, transport=transport)
 
 
@@ -120,6 +121,7 @@ def _poll_health(
 def _terminate(process: subprocess.Popen[bytes], policy: SidecarPolicy) -> None:
     if process.poll() is not None:
         return
+
     process.terminate()
     try:
         process.wait(timeout=policy.terminate_timeout)

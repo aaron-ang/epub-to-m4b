@@ -373,7 +373,8 @@ def test_convert_batch_skips_a_book_whose_output_name_is_taken(
 ) -> None:
     counting()
     first = build_epub(tmp_path / "a.epub")
-    twin = build_epub(tmp_path / "b.epub")
+    # A different book whose title slugifies to the same name.
+    twin = build_epub(tmp_path / "b.epub", title="Tiny Book!")
     assert _convert(first, twin, out_dir=tmp_path / "out") == 1
     assert (tmp_path / "out" / "tiny-book.m4b").is_file()
     err = capsys.readouterr().err
@@ -386,3 +387,48 @@ def test_convert_with_no_readable_book_never_starts_an_engine(
     made = counting()
     assert _convert(tmp_path / "a.epub", tmp_path / "b.epub", out_dir=tmp_path / "out") == 1
     assert made == []
+
+
+def test_convert_batch_converts_a_book_named_twice_once(
+    tmp_path: Path, counting: Callable[..., list[_CountingEngine]]
+) -> None:
+    counting()
+    book = build_epub(tmp_path / "a.epub")
+    assert _convert(book, book, out_dir=tmp_path / "out") == 0
+    assert (tmp_path / "out" / "tiny-book.m4b").is_file()
+
+
+def test_convert_batch_skips_a_book_that_fails_with_an_os_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    counting: Callable[..., list[_CountingEngine]],
+) -> None:
+    counting()
+    real_write_vtt = cli.write_vtt
+
+    def write_vtt(cues: list[tuple[str, float, float]], path: Path) -> None:
+        if path.stem == "first-book":
+            raise OSError("No space left on device")
+        real_write_vtt(cues, path)
+
+    monkeypatch.setattr("epub_to_m4b.cli.write_vtt", write_vtt)
+    first = build_epub(tmp_path / "a.epub", title="First Book")
+    second = build_epub(tmp_path / "b.epub", title="Second Book")
+    assert _convert(first, second, out_dir=tmp_path / "out") == 1
+    assert (tmp_path / "out" / "second-book.vtt").is_file()
+    err = capsys.readouterr().err
+    assert "error: No space left on device" in err
+    assert f"failed 1 of 2 books:\n  {first}\n" in err
+
+
+def test_convert_batch_lists_every_book_when_setup_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    first = build_epub(tmp_path / "a.epub", title="First Book")
+    second = build_epub(tmp_path / "b.epub", title="Second Book")
+    assert _convert(first, second, out_dir=tmp_path / "out") == 1
+    err = capsys.readouterr().err
+    assert "ffmpeg" in err
+    assert f"failed 2 of 2 books:\n  {first}\n  {second}\n" in err

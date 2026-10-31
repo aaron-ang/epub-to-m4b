@@ -7,6 +7,7 @@ import logging
 import re
 import sys
 import tempfile
+from collections import deque
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -209,9 +210,11 @@ def _cmd_dump_text(book: Book, args: argparse.Namespace) -> int:
             print(f"error: chapter {args.chapter} out of range 1..{len(chapters)}", file=sys.stderr)
             return 1
         chapters = [chapters[args.chapter - 1]]
+
     paragraph_texts = [p.text for _, ch in chapters for p in ch.paragraphs]
     if args.normalized or args.split:
         paragraph_texts = normalize_all(paragraph_texts)
+
     texts = iter(paragraph_texts)
     for n, ch in chapters:
         print(f"=== [{n}] {ch.title}")
@@ -225,6 +228,7 @@ def _cmd_dump_text(book: Book, args: argparse.Namespace) -> int:
                 for i, sentence in enumerate(pieces):
                     print(f"    [{i}] {sentence}")
         print()
+
     return 0
 
 
@@ -250,23 +254,25 @@ def _cmd_convert(args: argparse.Namespace) -> int:
     failed: list[Path] = []
     # Slug -> the book that claimed it, so two books with the same title
     # cannot overwrite each other's m4b in one run.
-    books: dict[str, tuple[Path, Book]] = {}
+    claimed: dict[str, tuple[Path, str]] = {}
+    pending: deque[tuple[Path, str, Book]] = deque()
     for path in paths:
         book = _read_book(path, args)
         if book is None:
             failed.append(path)
             continue
         slug = _slugify(book.title)
-        if slug in books:
-            print(
-                f"error: {path}: {slug}.m4b is also the output of {books[slug][0]}",
-                file=sys.stderr,
-            )
-            failed.append(path)
+        if slug in claimed:
+            first, sha = claimed[slug]
+            if sha != book.source_sha256:
+                print(f"error: {path}: {slug}.m4b is also the output of {first}", file=sys.stderr)
+                failed.append(path)
+            # The same book named twice converts once.
             continue
-        books[slug] = (path, book)
+        claimed[slug] = (path, book.source_sha256)
+        pending.append((path, slug, book))
 
-    if books:
+    if pending:
         try:
             require_ffmpeg()
             cache_dir = resolve_cache_dir()
@@ -274,17 +280,21 @@ def _cmd_convert(args: argparse.Namespace) -> int:
             engine = create_engine(args.engine, app_config)
         except EpubToM4bError as exc:
             print(f"error: {exc}", file=sys.stderr)
-            return 1
-
-        with engine:
-            for n, (slug, (path, book)) in enumerate(books.items(), start=1):
-                if len(books) > 1:
-                    _log(f"=== [{n}/{len(books)}] {path}")
-                try:
-                    _convert(book, slug, engine, out_dir=out_dir, cache_dir=cache_dir)
-                except EpubToM4bError as exc:
-                    print(f"error: {exc}", file=sys.stderr)
-                    failed.append(path)
+            failed.extend(path for path, _, _ in pending)
+            pending.clear()
+        else:
+            total = len(pending)
+            with engine:
+                for n in range(1, total + 1):
+                    # Popped, so each Book is freed once converted.
+                    path, slug, book = pending.popleft()
+                    if total > 1:
+                        _log(f"=== [{n}/{total}] {path}")
+                    try:
+                        _convert(book, slug, engine, out_dir=out_dir, cache_dir=cache_dir)
+                    except (EpubToM4bError, OSError) as exc:
+                        print(f"error: {exc}", file=sys.stderr)
+                        failed.append(path)
 
     if failed and len(paths) > 1:
         print(f"failed {len(failed)} of {len(paths)} books:", file=sys.stderr)

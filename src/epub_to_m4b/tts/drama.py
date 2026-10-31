@@ -44,10 +44,11 @@ from epub_to_m4b.tts.sidecar import (
     start_or_adopt,
 )
 
-# Drama 3's codec decodes 44.1 kHz audio at 2048 samples per frame, so one
-# max_new_tokens step is 2048 / 44100 s of speech.
+# Drama 3's codec decodes one frame per _SAMPLES_PER_FRAME samples of
+# _SAMPLE_RATE audio, so one max_new_tokens step is one frame of speech.
 _SAMPLE_RATE = 44100
-_FRAME_RATE = _SAMPLE_RATE / 2048
+_SAMPLES_PER_FRAME = 2048
+_FRAME_RATE = _SAMPLE_RATE / _SAMPLES_PER_FRAME
 # Every request's prompt holds the reference voice (one row per codec frame
 # of its audio), its transcript and the text, at most one row per UTF-8 byte
 # each (byte-level BPE), plus the chat template's own tokens, which this
@@ -65,10 +66,16 @@ _WIDEST_CHAR = "\U0001f600"
 # Speech requests resent after a reset connection. The same text and seed
 # give the same clip, so a resend is safe; a dead server fails it too.
 _SPEECH_RESENDS = 1
-# Loading the ~38 GiB of weights, compiling and capturing CUDA graphs takes
-# about ten minutes on a DGX Spark; a request waits behind the server's
-# queue of up to max_concurrency * batch_size others.
-DRAMA_SIDECAR_POLICY = SidecarPolicy(startup_timeout=1800.0, request_timeout=1800.0)
+# Loading the weights, compiling and capturing CUDA graphs takes many
+# minutes on a cold start; a request waits behind the server's
+# queue of up to max_concurrency * batch_size others. On SIGTERM vLLM takes
+# longer than the default terminate timeout to stop its engine processes; a
+# SIGKILL before then can leave them holding GPU memory.
+DRAMA_SIDECAR_POLICY = SidecarPolicy(
+    startup_timeout=1800.0,
+    request_timeout=1800.0,
+    terminate_timeout=60.0,
+)
 
 
 @dataclass(frozen=True)
@@ -76,8 +83,8 @@ class DramaConfig:
     # Starts the server, e.g. ["vllm", "serve", "fishaudio/drama-3", "--omni"];
     # the sidecar appends --host/--port.
     command: Sequence[str]
-    # Audio the narrator voice is cloned from (WAV, FLAC or MP3, up to 60 s),
-    # and its exact transcript.
+    # Audio the narrator voice is cloned from (WAV, FLAC or MP3, no longer
+    # than the server accepts), and its exact transcript.
     reference_audio: Path
     reference_text: str
     cache_dir: Path

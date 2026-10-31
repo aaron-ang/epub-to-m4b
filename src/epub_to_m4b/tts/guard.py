@@ -31,7 +31,7 @@ class RunawayPolicy:
     clip in a batch decodes in lockstep, so one runaway holds the whole batch
     until the cap, and keeping it just above the retry limit bounds that
     stall. Reseeds get the same cap. Real speech never reaches its retry
-    limit (the longest verified clip in a whole book came to 0.98 of it), so
+    limit (the longest verified clip in a whole book came in just under it), so
     a clip stopped by the cap is babble: it scores infinite and loses to any
     complete take. Only a text whose every take hit the cap gets one last
     uncapped reseed, so the kept clip is never one the cap truncated.

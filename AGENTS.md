@@ -174,7 +174,7 @@ Every threshold or default lives as a named module constant next to a comment ex
 | `GapPolicy` defaults | `synth/orchestrator.py` | Silence after sentence / clause / paragraph / heading and chapter end |
 | `RetryPolicy` defaults | `tts/http.py` | Retry count, backoff base (doubles per retry), Retry-After cap |
 | `BreezeConfig` defaults | `tts/breeze.py` | Sidecar port, cfg scale, seed, batch size (clamped to server `max_batch_texts`) |
-| `DRAMA_SIDECAR_POLICY` | `tts/drama.py` | Startup timeout for the ~10 min vLLM-Omni cold start; per-request timeout behind the server queue |
+| `DRAMA_SIDECAR_POLICY` | `tts/drama.py` | Startup timeout for the ~10 min vLLM-Omni cold start; per-request timeout behind the server queue; terminate timeout for its slow shutdown |
 | `_BATCH_RESENDS` | `tts/breeze.py` | Batch requests resent after a reset connection (seeded, so same clips) |
 | `_SPEECH_RESENDS` | `tts/drama.py` | Speech requests resent after a reset connection (same text + seed = same clip) |
 | `_TEMPLATE_ROWS` | `tts/drama.py` | Prompt rows allowed for the chat template on top of reference, transcript and text |

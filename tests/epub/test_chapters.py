@@ -12,7 +12,7 @@ from epub_to_m4b.epub.chapters import (
 
 H = ParagraphKind.HEADING
 B = ParagraphKind.BODY
-LONG = "Sentence of narration that carries the story forward. " * 6  # well over 200 chars
+LONG = "Sentence of narration that carries the story forward. " * 6  # well over DEFAULT_MIN_CHARS
 TITLE = "Outliers, The Story of Success"
 
 

@@ -490,7 +490,7 @@ def test_sidecar_client_drops_idle_connections_before_the_server(
     policy = sidecar.SidecarPolicy(keepalive_expiry=1.5)
     sidecar.sidecar_client(policy, max_connections=8).close()
     (limits,) = seen
-    # Servers close idle connections after 5 s; the client must go first.
+    # Servers close idle connections after a few seconds; the client must go first.
     assert limits.keepalive_expiry == 1.5 < 5
     assert limits.max_connections == limits.max_keepalive_connections == 8
     assert sidecar.DEFAULT_SIDECAR_POLICY.keepalive_expiry < 5

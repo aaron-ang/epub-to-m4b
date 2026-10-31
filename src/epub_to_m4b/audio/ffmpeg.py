@@ -20,7 +20,7 @@ from epub_to_m4b.errors import EpubToM4bError
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 # AAC bitrate for the mono speech track. ffmpeg's native AAC encoder caps
-# its effective rate for 24 kHz mono close to this value, so a higher
+# its effective rate for mono speech close to this value, so a higher
 # setting raises only the nominal rate, not the quality.
 AAC_BITRATE = "96k"
 # Integrated loudness the m4b is normalized to (EBU R128 ``loudnorm``,

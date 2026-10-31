@@ -129,7 +129,7 @@ Config file resolution, first match wins: `--config PATH`, then `E2M_CONFIG` (bo
 | `batch_size`      | int      | `64`                  |          |
 | `seed`            | int      | `42`                  |          |
 
-`command` starts `vllm serve <model> --omni` from [vLLM-Omni](https://github.com/vllm-project/vllm-omni). The narrator voice is cloned from `reference_audio` (WAV, FLAC or MP3, up to 60 s) and `reference_text`, its exact transcript. Drama 3 weights are under the Fish Audio Community License.
+`command` starts `vllm serve <model> --omni` from [vLLM-Omni](https://github.com/vllm-project/vllm-omni). The narrator voice is cloned from `reference_audio` (WAV, FLAC or MP3, up to 30 s) and `reference_text`, its exact transcript. Drama 3 weights are under the Fish Audio Community License.
 
 For both self-hosted engines, `--host`/`--port` are appended to `command`, and a server already listening on `port` is adopted instead of spawned.
 

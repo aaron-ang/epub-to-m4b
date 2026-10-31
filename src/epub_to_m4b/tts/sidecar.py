@@ -58,7 +58,7 @@ class SidecarPolicy:
     busy_timeout: float = 300.0  # total wait for a busy server before giving up
     busy_wait: float = 5.0  # between busy retries
     # Idle pooled connections are dropped after this. Servers close their side
-    # after 5 s idle (uvicorn's default, vLLM's VLLM_HTTP_TIMEOUT_KEEP_ALIVE);
+    # after a few seconds idle (uvicorn's default, vLLM's VLLM_HTTP_TIMEOUT_KEEP_ALIVE);
     # a request sent on a connection the server is closing that instant is
     # reset, so the client gives up its connections first.
     keepalive_expiry: float = 2.0

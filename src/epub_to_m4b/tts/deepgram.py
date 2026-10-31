@@ -21,7 +21,7 @@ from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, request_with_
 
 # Rate requested via the ``sample_rate=24000`` query parameter.
 _SAMPLE_RATE = 24000
-# Longest sentence sent uncut: under Deepgram's 2000-character request
+# Longest sentence sent uncut: under Deepgram's per-request character
 # limit, and longer than almost any sentence in a book.
 _MAX_CHARS = 1000
 

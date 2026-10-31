@@ -49,7 +49,7 @@ _DEFAULT_INSTRUCTION = "A clear, neutral adult narrator voice with a calm, stead
 _REFERENCE_TEXT = "This is a clear, steady voice reading aloud for narration."
 # Ceiling on Breeze's max_chars. A batch decodes in lockstep until its
 # longest text finishes, so one long sentence keeps every shorter one's slot
-# idle; past about 300 characters that stall outweighs keeping the sentence
+# idle; past this many characters that stall outweighs keeping the sentence
 # whole.
 _MAX_CHARS = 300
 # Batches resent after a reset connection. The seed fixes every take, so a
@@ -193,7 +193,7 @@ class BreezeEngine(TTSEngine):
             self.sample_rate = self._fetch_sample_rate()
             self.server = self._fetch_server_info()
             # The orchestrator sizes each synthesize() call by max_batch; leaving
-            # the ABC default of 1 would feed the GPU one sentence per request.
+            # the ABC default would feed the GPU one sentence per request.
             self.max_batch = min(self.config.batch_size, self.server.max_batch_texts)
             self.retries = self.runaway.retries
             # The server's max_new_tokens bounds even an uncapped reseed, so a

@@ -22,7 +22,7 @@ from epub_to_m4b.tts.http import new_client, pcm_response_to_clip, request_with_
 # Rate encoded in the ``output_format=pcm_24000`` query parameter.
 _SAMPLE_RATE = 24000
 # Longest sentence sent uncut: under every ElevenLabs model's request limit
-# (maximum_text_length_per_request in GET /v1/models, 10000+), and longer
+# (maximum_text_length_per_request in GET /v1/models), and longer
 # than almost any sentence in a book. Fixed rather than fetched, so a cached
 # run needs no network and split points never move with the API.
 _MAX_CHARS = 1000

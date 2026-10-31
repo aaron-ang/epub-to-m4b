@@ -19,7 +19,7 @@ from epub_to_m4b.tts.base import TTSEngine
 # enough that downstream VTT cues have a meaningful, non-zero duration.
 _CHARS_PER_SECOND = 15.0
 _MIN_SECONDS = 0.2
-# 24 kHz matches the API engines so mixed-engine tests share one rate.
+# Matches the API engines' rate so mixed-engine tests share one rate.
 _SAMPLE_RATE = 24000
 # A440 reference pitch.
 _TONE_FREQUENCY_HZ = 440.0

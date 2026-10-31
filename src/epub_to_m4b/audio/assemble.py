@@ -22,7 +22,7 @@ from epub_to_m4b.book import AudioClip, Sentence
 
 _MIN_CHAPTER_SECONDS = 0.1
 # Engines leave their own silence at clip edges, from none to seconds
-# depending on engine and voice. A 10 ms frame quieter than the clip's
+# depending on engine and voice. An _EDGE_FRAME_SECONDS frame quieter than the clip's
 # loudest frame by more than _EDGE_SILENCE_DB is silence; trimming stops
 # _EDGE_PAD_SECONDS short of the outermost loud frames so breaths and
 # decaying word endings survive.

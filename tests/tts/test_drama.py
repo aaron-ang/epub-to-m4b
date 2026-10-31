@@ -13,8 +13,9 @@ import soundfile as sf
 
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.tts import guard
-from epub_to_m4b.tts.drama import DramaConfig, DramaEngine
+from epub_to_m4b.tts.drama import DRAMA_SIDECAR_POLICY, DramaConfig, DramaEngine
 from epub_to_m4b.tts.http import TTSError
+from epub_to_m4b.tts.sidecar import SidecarPolicy
 
 _SAMPLE_RATE = 44100
 _FRAME_RATE = _SAMPLE_RATE / 2048
@@ -320,7 +321,7 @@ def test_uncapped_reseed_gets_all_the_context_left(tmp_path: Path) -> None:
 
 
 def test_uncapped_reseed_never_asks_past_the_server_cap(tmp_path: Path) -> None:
-    # 8192 rows leave far more than the server accepts as max_new_tokens.
+    # A full context leaves far more than the server accepts as max_new_tokens.
     assert _MAX_MODEL_LEN - _prompt_rows("again") > _MAX_NEW_TOKENS
     bodies: list[dict[str, object]] = []
     with DramaEngine(_config(tmp_path), transport=_recording(bodies)) as engine:
@@ -463,3 +464,9 @@ def test_speech_reset_twice_raises(tmp_path: Path) -> None:
         pytest.raises(TTSError, match=r"POST .*/v1/audio/speech failed: ReadError"),
     ):
         engine.synthesize(["Hello there."])
+
+
+def test_spawned_server_gets_time_to_free_the_gpu_before_sigkill() -> None:
+    # vLLM outlasts the default terminate timeout after SIGTERM while it stops
+    # its engine processes; a SIGKILL sooner can leave them holding GPU memory.
+    assert DRAMA_SIDECAR_POLICY.terminate_timeout > SidecarPolicy().terminate_timeout

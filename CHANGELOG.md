@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/aaron-ang/epub-to-m4b/compare/v0.4.0...v0.5.0) (2026-10-31)
+
+
+### Features
+
+* **audio:** trim clip edge silence at assembly ([d3b40f2](https://github.com/aaron-ang/epub-to-m4b/commit/d3b40f2937095c0181dd99c3930109170896b626))
+* **cli:** convert several books with one engine ([29ac509](https://github.com/aaron-ang/epub-to-m4b/commit/29ac50938e0c2a829565912e13c4a6b4dbe8384d))
+
+
+### Bug Fixes
+
+* **cli:** keep a batch going through OS errors and duplicate paths ([c4f9ace](https://github.com/aaron-ang/epub-to-m4b/commit/c4f9aceff896dc9f7c05f12a7a330be0fc34bd34))
+* **tts:** cap Drama max_new_tokens at the server's 4096 ([415f860](https://github.com/aaron-ang/epub-to-m4b/commit/415f860856d9457b9c618014785368648ba8ec87))
+* **tts:** give a spawned Drama server time to exit before SIGKILL ([6736d40](https://github.com/aaron-ang/epub-to-m4b/commit/6736d40ab292b2be930d6466e5816d1de6b85eed))
+
+
+### Documentation
+
+* move non-critical README content into a FAQ ([f7ad71d](https://github.com/aaron-ang/epub-to-m4b/commit/f7ad71da4466cd69620d0bf8451978ede92d0eca))
+
 ## [0.4.0](https://github.com/aaron-ang/epub-to-m4b/compare/v0.3.0...v0.4.0) (2026-10-28)
 
 

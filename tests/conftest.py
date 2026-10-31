@@ -70,15 +70,15 @@ DOCS = {
 COVER_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16 + b"\xff\xd9"
 
 
-def build_epub(path: Path) -> Path:
+def build_epub(path: Path, *, title: str = "Tiny Book") -> Path:
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         zf.writestr("META-INF/container.xml", CONTAINER_XML)
-        zf.writestr("OEBPS/content.opf", CONTENT_OPF)
-        zf.writestr("OEBPS/toc.ncx", TOC_NCX)
+        zf.writestr("OEBPS/content.opf", CONTENT_OPF.replace("Tiny Book", title))
+        zf.writestr("OEBPS/toc.ncx", TOC_NCX.replace("Tiny Book", title))
         zf.writestr("OEBPS/cover.jpg", COVER_BYTES)
         for name, content in DOCS.items():
-            zf.writestr(f"OEBPS/{name}", content)
+            zf.writestr(f"OEBPS/{name}", content.replace("Tiny Book", title))
     return path
 
 

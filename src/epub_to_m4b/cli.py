@@ -41,6 +41,7 @@ from epub_to_m4b.synth.cache import (
 from epub_to_m4b.synth.orchestrator import GapPolicy, synthesize_book
 from epub_to_m4b.text.normalize import normalize_all
 from epub_to_m4b.text.split import DEFAULT_MAX_CHARS, split_paragraph
+from epub_to_m4b.tts.base import TTSEngine
 from epub_to_m4b.tts.registry import available_engines, create_engine
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -60,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
         "character counts, so TOC depth and merge threshold can be tuned before rendering.",
     )
     _add_book_args(chapters)
-    chapters.set_defaults(func=_cmd_chapters)
+    chapters.set_defaults(func=_with_book(_cmd_chapters))
 
     dump = sub.add_parser(
         "dump-text",
@@ -83,15 +84,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --split, cut only sentences longer than this; match the engine's "
         f"max_chars to see its clips (default: {DEFAULT_MAX_CHARS})",
     )
-    dump.set_defaults(func=_cmd_dump_text)
+    dump.set_defaults(func=_with_book(_cmd_dump_text))
 
     convert = sub.add_parser(
         "convert",
         help="render an audiobook (m4b + vtt) with chapter markers",
-        description="Synthesise every chapter with the chosen TTS engine and write an .m4b with "
-        "chapter markers plus a WebVTT transcript into the output directory.",
+        description="Synthesise every chapter of each book with the chosen TTS engine and write "
+        "an .m4b with chapter markers plus a WebVTT transcript into the output directory. One "
+        "engine serves every book; a book that fails is skipped and the rest still convert.",
     )
-    _add_book_args(convert)
+    _add_book_args(convert, many=True)
     convert.add_argument(
         "--engine",
         required=True,
@@ -111,8 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_book_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("epub", type=Path, help="path to the .epub file")
+def _add_book_args(parser: argparse.ArgumentParser, *, many: bool = False) -> None:
+    if many:
+        parser.add_argument("epub", type=Path, nargs="+", help="paths to one or more .epub files")
+    else:
+        parser.add_argument("epub", type=Path, help="path to the .epub file")
     parser.add_argument(
         "--toc-depth",
         type=int,
@@ -152,13 +157,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 1
     _configure_logging()
-    try:
-        book = read_book(args.epub, toc_depth=args.toc_depth, min_chars=args.min_chars)
-    except (OSError, ValueError, KeyError) as exc:
-        print(f"error: cannot read {args.epub}: {exc}", file=sys.stderr)
-        return 1
-    result: int = args.func(book, args)
+    result: int = args.func(args)
     return result
+
+
+def _read_book(path: Path, args: argparse.Namespace) -> Book | None:
+    """Parse ``path``, or print why it can't be read and return ``None``."""
+    try:
+        return read_book(path, toc_depth=args.toc_depth, min_chars=args.min_chars)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"error: cannot read {path}: {exc}", file=sys.stderr)
+        return None
+
+
+def _with_book(
+    command: Callable[[Book, argparse.Namespace], int],
+) -> Callable[[argparse.Namespace], int]:
+    """Adapt a single-book command to ``main``: read ``args.epub`` first."""
+
+    def run(args: argparse.Namespace) -> int:
+        book = _read_book(args.epub, args)
+        return 1 if book is None else command(book, args)
+
+    return run
 
 
 # Widest the title column in `chapters` output gets; longer titles are
@@ -212,37 +233,81 @@ def _slugify(title: str) -> str:
     return slug or "book"
 
 
-def _cmd_convert(book: Book, args: argparse.Namespace) -> int:
-    try:
-        return _convert(book, args)
-    except EpubToM4bError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+def _log(message: str) -> None:
+    # Renders run for hours under nohup/redirect; block-buffered stdout
+    # would show nothing until exit.
+    print(message, flush=True)
 
 
-def _convert(book: Book, args: argparse.Namespace) -> int:
-    """Convert with no error handling; ``_cmd_convert`` turns every
-    :class:`EpubToM4bError` into the ``error: ...`` exit."""
-    require_ffmpeg()
+def _cmd_convert(args: argparse.Namespace) -> int:
+    """Convert every book in ``args.epub`` with one engine, so a sidecar
+    server starts once for the batch. A book that cannot be read or fails to
+    convert is reported and skipped; the exit code is 1 if any book failed.
+    Books are read before the engine starts, so a batch with nothing to
+    convert never starts a server."""
+    paths: list[Path] = args.epub
     out_dir: Path = args.out_dir
+    failed: list[Path] = []
+    # Slug -> the book that claimed it, so two books with the same title
+    # cannot overwrite each other's m4b in one run.
+    books: dict[str, tuple[Path, Book]] = {}
+    for path in paths:
+        book = _read_book(path, args)
+        if book is None:
+            failed.append(path)
+            continue
+        slug = _slugify(book.title)
+        if slug in books:
+            print(
+                f"error: {path}: {slug}.m4b is also the output of {books[slug][0]}",
+                file=sys.stderr,
+            )
+            failed.append(path)
+            continue
+        books[slug] = (path, book)
+
+    if books:
+        try:
+            require_ffmpeg()
+            cache_dir = resolve_cache_dir()
+            app_config = load_config(args.config, cache_dir=cache_dir)
+            engine = create_engine(args.engine, app_config)
+        except EpubToM4bError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        with engine:
+            for n, (slug, (path, book)) in enumerate(books.items(), start=1):
+                if len(books) > 1:
+                    _log(f"=== [{n}/{len(books)}] {path}")
+                try:
+                    _convert(book, slug, engine, out_dir=out_dir, cache_dir=cache_dir)
+                except EpubToM4bError as exc:
+                    print(f"error: {exc}", file=sys.stderr)
+                    failed.append(path)
+
+    if failed and len(paths) > 1:
+        print(f"failed {len(failed)} of {len(paths)} books:", file=sys.stderr)
+        for path in failed:
+            print(f"  {path}", file=sys.stderr)
+
+    return 1 if failed else 0
+
+
+def _convert(book: Book, slug: str, engine: TTSEngine, *, out_dir: Path, cache_dir: Path) -> None:
+    """Convert one book with no error handling; ``_cmd_convert`` reports
+    every :class:`EpubToM4bError` and moves on to the next book."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    slug = _slugify(book.title)
     m4b_path = out_dir / f"{slug}.m4b"
     vtt_path = out_dir / f"{slug}.vtt"
-
-    cache_dir = resolve_cache_dir()
-    app_config = load_config(args.config, cache_dir=cache_dir)
-    engine = create_engine(args.engine, app_config)
-
-    def log(message: str) -> None:
-        # Renders run for hours under nohup/redirect; block-buffered stdout
-        # would show nothing until exit.
-        print(message, flush=True)
-
-    with engine:
-        results = synthesize_book(
-            book, engine, cache_dir=cache_dir, out_dir=out_dir, policy=GapPolicy(), log=log
-        )
+    results = synthesize_book(
+        book,
+        engine,
+        cache_dir=cache_dir,
+        out_dir=out_dir,
+        policy=GapPolicy(),
+        log=_log,
+    )
 
     cues: list[tuple[str, float, float]] = []
     durations: list[float] = []
@@ -263,13 +328,12 @@ def _convert(book: Book, args: argparse.Namespace) -> int:
         print(f"{m4b_path} already up to date, skipping re-encode")
     else:
         clear_encode_digest(out_dir, book.source_sha256)
-        _write_m4b(book, m4b_path, chapter_files, durations, log=log)
+        _write_m4b(book, m4b_path, chapter_files, durations, log=_log)
         store_encode_digest(out_dir, book.source_sha256, digest)
 
     write_vtt(cues, vtt_path)
     print(f"wrote {m4b_path}")
     print(f"wrote {vtt_path}")
-    return 0
 
 
 def _m4b_is_current(

@@ -11,8 +11,11 @@ import pytest
 from epub_to_m4b import __version__, cli
 from epub_to_m4b.book import AudioClip
 from epub_to_m4b.cli import build_parser, main
+from epub_to_m4b.config import AppConfig
 from epub_to_m4b.tts.base import TTSEngine
 from epub_to_m4b.tts.http import TTSError
+from epub_to_m4b.tts.registry import create_engine
+from tests.conftest import build_epub
 
 
 def test_parser_builds() -> None:
@@ -240,7 +243,7 @@ def test_convert_help_documents_every_flag(capsys: pytest.CaptureFixture[str]) -
     assert excinfo.value.code == 0
     # argparse wraps long help lines at the terminal width; compare unwrapped.
     out = " ".join(capsys.readouterr().out.split())
-    assert "path to the .epub file" in out
+    assert "paths to one or more .epub files" in out
     assert "TOC nesting level that starts a new chapter (default: 1)" in out
     assert "merge into a neighbour (default: 200)" in out
     assert "TTS engine (see README for configuration)" in out
@@ -270,3 +273,116 @@ def test_run_logged_reports_100_percent_at_total(monkeypatch: pytest.MonkeyPatch
     lines: list[str] = []
     cli._run_logged(["ffmpeg"], "encode", total, lines.append)
     assert lines == ["encode 50% (3:31:51 / 7:03:43)", "encode 100% (7:03:43 / 7:03:43)"]
+
+
+class _CountingEngine(TTSEngine):
+    """Silence engine wrapper that counts opens and closes and can fail the
+    first ``fail_calls`` synthesize calls."""
+
+    name: ClassVar[str] = "counting"
+
+    def __init__(self, inner: TTSEngine, *, fail_calls: int = 0) -> None:
+        self.inner = inner
+        self.sample_rate = inner.sample_rate
+        self.fail_calls = fail_calls
+        self.closed = 0
+
+    def synthesize(self, texts: Sequence[str]) -> list[AudioClip]:
+        if self.fail_calls:
+            self.fail_calls -= 1
+            raise TTSError("boom")
+        return self.inner.synthesize(texts)
+
+    def fingerprint(self) -> str:
+        return self.inner.fingerprint()
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+@pytest.fixture
+def counting(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[_CountingEngine]]:
+    """Route ``create_engine`` through ``_CountingEngine``; returns the engines made."""
+
+    def install(*, fail_calls: int = 0) -> list[_CountingEngine]:
+        made: list[_CountingEngine] = []
+
+        def factory(name: str, config: AppConfig) -> TTSEngine:
+            engine = _CountingEngine(create_engine(name, config), fail_calls=fail_calls)
+            made.append(engine)
+            return engine
+
+        monkeypatch.setattr("epub_to_m4b.cli.create_engine", factory)
+        return made
+
+    return install
+
+
+def _convert(*paths: Path, out_dir: Path) -> int:
+    return main(["convert", *map(str, paths), "--engine", "silence", "-o", str(out_dir)])
+
+
+def test_convert_batch_writes_every_book_with_one_engine(
+    tmp_path: Path, counting: Callable[..., list[_CountingEngine]]
+) -> None:
+    made = counting()
+    first = build_epub(tmp_path / "a.epub", title="First Book")
+    second = build_epub(tmp_path / "b.epub", title="Second Book")
+    assert _convert(first, second, out_dir=tmp_path / "out") == 0
+    assert (tmp_path / "out" / "first-book.m4b").is_file()
+    assert (tmp_path / "out" / "second-book.m4b").is_file()
+    assert len(made) == 1
+    assert made[0].closed == 1
+
+
+def test_convert_batch_skips_unreadable_book_and_exits_1(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    counting: Callable[..., list[_CountingEngine]],
+) -> None:
+    counting()
+    missing = tmp_path / "missing.epub"
+    good = build_epub(tmp_path / "good.epub", title="Good Book")
+    assert _convert(missing, good, out_dir=tmp_path / "out") == 1
+    assert (tmp_path / "out" / "good-book.m4b").is_file()
+    err = capsys.readouterr().err
+    assert f"cannot read {missing}" in err
+    assert f"failed 1 of 2 books:\n  {missing}\n" in err
+
+
+def test_convert_batch_continues_after_a_book_fails_to_synthesize(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    counting: Callable[..., list[_CountingEngine]],
+) -> None:
+    counting(fail_calls=1)
+    first = build_epub(tmp_path / "a.epub", title="First Book")
+    second = build_epub(tmp_path / "b.epub", title="Second Book")
+    assert _convert(first, second, out_dir=tmp_path / "out") == 1
+    assert not (tmp_path / "out" / "first-book.m4b").exists()
+    assert (tmp_path / "out" / "second-book.m4b").is_file()
+    err = capsys.readouterr().err
+    assert "error: boom" in err
+    assert f"failed 1 of 2 books:\n  {first}\n" in err
+
+
+def test_convert_batch_skips_a_book_whose_output_name_is_taken(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    counting: Callable[..., list[_CountingEngine]],
+) -> None:
+    counting()
+    first = build_epub(tmp_path / "a.epub")
+    twin = build_epub(tmp_path / "b.epub")
+    assert _convert(first, twin, out_dir=tmp_path / "out") == 1
+    assert (tmp_path / "out" / "tiny-book.m4b").is_file()
+    err = capsys.readouterr().err
+    assert f"error: {twin}: tiny-book.m4b is also the output of {first}" in err
+
+
+def test_convert_with_no_readable_book_never_starts_an_engine(
+    tmp_path: Path, counting: Callable[..., list[_CountingEngine]]
+) -> None:
+    made = counting()
+    assert _convert(tmp_path / "a.epub", tmp_path / "b.epub", out_dir=tmp_path / "out") == 1
+    assert made == []

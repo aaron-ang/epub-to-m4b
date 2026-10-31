@@ -55,7 +55,7 @@ pixi run epub-to-m4b convert book.epub --engine openai -o out/
 |-------------|-------------------------------------------------------------|
 | `chapters`  | List detected chapters (title, paragraph/char counts, docs) |
 | `dump-text` | Print chapter titles and paragraphs as they will be read    |
-| `convert`   | Render `<slug>.m4b` and `<slug>.vtt`                        |
+| `convert`   | Render `<slug>.m4b` and `<slug>.vtt` for one or more books  |
 
 | `convert` flag      | Required | Meaning                                                                             |
 |---------------------|----------|-------------------------------------------------------------------------------------|
@@ -64,6 +64,8 @@ pixi run epub-to-m4b convert book.epub --engine openai -o out/
 | `--config PATH`     | no       | TOML config file (default: `$E2M_CONFIG`, then `~/.config/epub-to-m4b/config.toml`) |
 
 `<subcommand> --help` lists every flag. Rerun the same `convert` to resume an interrupted render.
+
+`convert` takes several EPUBs (`convert books/*.epub --engine drama -o out/`) and runs them through one engine, so a self-hosted server starts once. A book that fails is reported and skipped; the rest still convert, and the exit code is 1.
 
 ## Configuration
 

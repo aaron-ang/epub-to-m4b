@@ -16,7 +16,7 @@ epub/reader ─> epub/chapters ─> text/normalize + split ─> synth/orchestrat
 
 | Path                 | Responsibility                                                 |
 |----------------------|----------------------------------------------------------------|
-| `cli.py`             | argparse: `chapters` / `dump-text` / `convert`; atomic encode  |
+| `cli.py`             | argparse: `chapters` / `dump-text` / `convert` (many books, one engine, failures skipped); atomic encode |
 | `config.py`          | Config path resolution; `[engine.*]` tables -> `AppConfig`     |
 | `book.py`            | `Book`, `Chapter`, `Paragraph`, `Sentence`, `AudioClip`        |
 | `errors.py`          | `EpubToM4bError`: base for user-facing errors; CLI exit 1      |
